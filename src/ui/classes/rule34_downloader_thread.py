@@ -39,7 +39,7 @@ class Rule34DownloadThread(QThread):
         if settings.value("r34_exclude_gore", False, type=bool):
             self.active_blacklist.extend(['guro', 'amputat', 'decapitat', 'disembowel', 'mutilat', 'impal', 'torture', 'prolapse', 'viscera', 'autopsy', 'vivisection'])
         if settings.value("r34_exclude_scat", False, type=bool):
-            self.active_blacklist.extend(['scat', 'feces', 'urine', 'watersports', 'vomit', 'puke', 'copro', 'defecat', 'smegma', 'gaper'])
+            self.active_blacklist.extend(['scat', 'feces', 'urine', 'watersports', 'vomit', 'puke', 'copro', 'defecat', 'smegma', 'gaper', "fart"])
         if settings.value("r34_exclude_furry", False, type=bool):
             self.active_blacklist.extend(['bestiality', 'zoophil', 'feral', 'animal_genitalia', 'animal_penis', 'animal_sex', 'furry', 'anthro'])
         if settings.value("r34_exclude_loli", False, type=bool):

@@ -235,9 +235,6 @@ class Rule34SettingsDialog(QDialog):
         self.appdata_dir = os.path.join(self.base_dir, "appdata")
         os.makedirs(self.appdata_dir, exist_ok=True)
         
-        self.LOCAL_TAGS_DIR = os.path.join(self.base_dir, "Rule34 Tags")
-        os.makedirs(self.LOCAL_TAGS_DIR, exist_ok=True)
-
         self.CHAR_JSON_PATH = os.path.join(self.appdata_dir, "characters.json")
         
         self.assets_dir = os.path.join(self.base_dir, "assets", "svg")
@@ -354,7 +351,7 @@ class Rule34SettingsDialog(QDialog):
         self.exclude_necro_cb = QCheckBox("Exclude Necrophilia / Death")
 
         self.exclude_gore_cb.setToolTip("<p style='white-space:pre'><b>Blocked Tags:</b><br>guro, amputat, decapitat, disembowel, mutilat,<br>impal, torture, prolapse, viscera, autopsy, vivisection</p>")
-        self.exclude_scat_cb.setToolTip("<p style='white-space:pre'><b>Blocked Tags:</b><br>scat, feces, urine, watersports, vomit,<br>puke, copro, defecat, smegma, gaper</p>")
+        self.exclude_scat_cb.setToolTip("<p style='white-space:pre'><b>Blocked Tags:</b><br>scat, feces, urine, watersports, vomit,<br>puke, copro, defecat, smegma, gaper, fart</p>")
         self.exclude_furry_cb.setToolTip("<p style='white-space:pre'><b>Blocked Tags:</b><br>bestiality, zoophil, feral, animal_genitalia,<br>animal_penis, animal_sex, furry, anthro</p>")
         self.exclude_loli_cb.setToolTip("<p style='white-space:pre'><b>Blocked Tags:</b><br>loli, shota, underage, child, toddler, infant, pedoph, cub</p>")
         self.exclude_vore_cb.setToolTip("<p style='white-space:pre'><b>Blocked Tags:</b><br>vore, cannibalism, unbirth, absorption, digestion</p>")
@@ -446,7 +443,7 @@ class Rule34SettingsDialog(QDialog):
         hf_layout.addWidget(self.hf_progress_bar)
         char_layout.addLayout(hf_layout)
         
-        if os.path.exists(os.path.join(self.LOCAL_TAGS_DIR, "characters.json")):
+        if os.path.exists(self.CHAR_JSON_PATH):
             self.hf_download_btn.setText("✅ Offline Database Installed")
             self.hf_download_btn.setEnabled(False)
 
