@@ -59,8 +59,9 @@ def load_cookies_from_netscape_file(filepath, logger_func, target_domain_filter=
                     if target_domain_filter:
                         host_to_match = target_domain_filter.lower()
                         cookie_domain_norm = cookie_domain.lower()
-                        if (cookie_domain_norm.startswith('.') and host_to_match.endswith(cookie_domain_norm)) or \
-                           (host_to_match == cookie_domain_norm):
+                        # Strips the leading dot so ".simpcity.cr" perfectly matches "simpcity.cr"
+                        if (cookie_domain_norm.lstrip('.') == host_to_match) or \
+                            (host_to_match.endswith(cookie_domain_norm)):
                             cookies[name] = value
                     else:
                         cookies[name] = value

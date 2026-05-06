@@ -163,10 +163,25 @@ class DownloaderApp (QWidget ):
         loads saved user settings (themes, paths, language), and builds the UI.
         """
         super().__init__()
-        self.settings = QSettings(CONFIG_ORGANIZATION_NAME, CONFIG_APP_NAME_MAIN)
+        
+        # 1. Determine the EXACT permanent directory of the .exe or script
+        if getattr(sys, 'frozen', False):
+            self.app_base_dir = os.path.dirname(sys.executable)
+        else:
+            self.app_base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
+            
+        # 2. Define and create the portable 'appdata' folder right next to the .exe
+        user_data_path = os.path.join(self.app_base_dir, "appdata")
+        os.makedirs(user_data_path, exist_ok=True)
+        self.user_data_path = user_data_path
+        
+        # 3. Force QSettings to use a local INI file instead of the Windows Registry
+        ini_path = os.path.join(user_data_path, "config.ini")
+        self.settings = QSettings(ini_path, QSettings.IniFormat)
+        
+        # 4. Initialize standard variables
         self.active_update_profile = None
         self.new_posts_for_update = []
-
         self.active_update_profiles_list = []
         self.fetched_posts_for_batch_update = []
         self.is_ready_to_download_batch_update = False
@@ -174,6 +189,7 @@ class DownloaderApp (QWidget ):
         self.finish_lock = threading.Lock() 
         self.add_info_in_pdf_setting = False
 
+        # 5. Load resolution safely from the new INI file
         saved_res = self.settings.value(RESOLUTION_KEY, "Auto")
         if saved_res != "Auto":
             try:
@@ -181,18 +197,7 @@ class DownloaderApp (QWidget ):
                 self.resize(width, height)
                 self._center_on_screen() 
             except ValueError:
-                self.log_signal.emit(f"⚠️ Invalid saved resolution '{saved_res}'. Using default.")
-
-        if getattr(sys, 'frozen', False) and hasattr(sys, '_MEIPASS'):
-            self.app_base_dir = sys._MEIPASS
-        else:
-            self.app_base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
-
-        executable_dir = os.path.dirname(sys.executable) if getattr(sys, 'frozen', False) else self.app_base_dir
-        user_data_path = os.path.join(executable_dir, "appdata")
-        os.makedirs(user_data_path, exist_ok=True)
-
-        self.user_data_path = user_data_path 
+                pass # Will just use default size
 
         self.jobs_dir = os.path.join(self.user_data_path, "jobs")
         os.makedirs(self.jobs_dir, exist_ok=True)
@@ -1315,6 +1320,8 @@ class DownloaderApp (QWidget ):
             self .fav_mode_active_label .setText (self ._tr ("fav_mode_active_label_text","⭐ Favorite Mode is active..."))
         if hasattr (self ,'cookie_browse_button'):
             self .cookie_browse_button .setToolTip (self ._tr ("cookie_browse_button_tooltip","Browse for a cookie file..."))
+        if hasattr(self, 'rule34_settings_btn'):
+            self.rule34_settings_btn.clicked.connect(self._show_rule34_settings_dialog)       
         self ._update_manga_filename_style_button_text ()
         if hasattr (self ,'export_links_button'):self .export_links_button .setText (self ._tr ("export_links_button_text","Export Links"))
         if hasattr (self ,'download_extracted_links_button'):self .download_extracted_links_button .setText (self ._tr ("download_extracted_links_button_text","Download"))
@@ -1560,14 +1567,36 @@ class DownloaderApp (QWidget ):
             if not is_only_links and hasattr(self, 'char_filter_scope_toggle_button') and not self._is_download_active():
                 self.char_filter_scope_toggle_button.setEnabled(True)
 
-    def _update_booru_inputs_visibility(self, text=""):
-        if not hasattr(self, 'booru_inputs_widget'):
-            return
-        url_text = self.link_input.text().strip()
-        service, _, _ = extract_post_info(url_text)
+    def get_booru_credentials(self):
+        """Extracts the api_key and user_id from the unified pasted string."""
+        from urllib.parse import parse_qs
         
-        is_booru_url = service in ['danbooru', 'gelbooru', 'rule34']
-        self.booru_inputs_widget.setVisible(is_booru_url)
+        raw_creds = ""
+        if hasattr(self, 'booru_creds_input'):
+            raw_creds = self.booru_creds_input.text().strip()
+            
+        # Parse the string (removes the leading '&' or '?' automatically)
+        parsed = parse_qs(raw_creds.lstrip('?&'))
+        
+        # Safely get the values, default to empty string if not found
+        api_key = parsed.get('api_key', [''])[0]
+        user_id = parsed.get('user_id', [''])[0]
+        
+        return api_key, user_id
+
+    def _update_booru_inputs_visibility(self, text=""):
+        url_text = self.link_input.text().strip().lower()
+        
+        is_rule34 = "rule34.xxx" in url_text
+        is_standard_booru = "gelbooru.com" in url_text or "danbooru.donmai.us" in url_text
+        
+        # Show the unified text box for ANY Booru site
+        if is_rule34 or is_standard_booru:
+            self.booru_inputs_widget.setVisible(True)
+            # ONLY show the settings button if it's Rule34
+            self.rule34_settings_btn.setVisible(is_rule34)
+        else:
+            self.booru_inputs_widget.setVisible(False)
 
     def _on_character_input_changed_live (self ,text ):
         """
@@ -2316,6 +2345,20 @@ class DownloaderApp (QWidget ):
         
         dialog = FutureSettingsDialog(self)
         dialog.exec_()
+
+    def _show_rule34_settings_dialog(self):
+        """Opens the dedicated settings dialog for Rule34 downloads."""
+        try:
+            from .dialogs.Rule34SettingsDialog import Rule34SettingsDialog
+            
+            # Open the dialog without passing the old initial_creds argument
+            dialog = Rule34SettingsDialog(self)
+            
+            if dialog.exec_() == QDialog.Accepted:
+                self.log_signal.emit("✅ Rule34 Settings updated.")
+                    
+        except ImportError:
+            self.log_signal.emit("⚠️ Rule34SettingsDialog file not created yet!")
 
     def _show_support_dialog(self): 
         """Shows the support/donation dialog."""

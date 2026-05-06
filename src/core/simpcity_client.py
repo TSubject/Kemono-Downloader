@@ -1,5 +1,4 @@
-
-import cloudscraper
+from curl_cffi import requests as cffi_requests
 from bs4 import BeautifulSoup
 from urllib.parse import urlparse, unquote
 import os
@@ -11,15 +10,29 @@ def fetch_single_simpcity_page(url, logger_func, cookies=None, post_id=None):
     """
     Scrapes a single SimpCity page for images, external links, video tags, and iframes.
     """
-    scraper = cloudscraper.create_scraper()
-    headers = {'Referer': 'https://simpcity.cr/'}
-    
+    # Use a standard, modern browser User-Agent
+    headers = {
+        'Referer': 'https://simpcity.cr/',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+    }
+    print(f"Debug: Cookies being sent: {cookies.keys() if cookies else 'None'}")
     try:
-        response = scraper.get(url, timeout=30, headers=headers, cookies=cookies)
+        # impersonate="chrome120" perfectly fakes a real browser fingerprint to bypass Cloudflare
+        response = cffi_requests.get(
+            url, 
+            timeout=30, 
+            headers=headers, 
+            cookies=cookies, 
+            impersonate="chrome120" 
+        )
         final_url = response.url
         
         if response.status_code == 404:
             return None, [], final_url
+            
+        if response.status_code == 403:
+            logger_func("   [SimpCity] ❌ 403 Forbidden. Your cf_clearance cookie is expired or invalid. Please export a fresh cookies.txt file.")
+            
         response.raise_for_status()
         soup = BeautifulSoup(response.text, 'html.parser')
 

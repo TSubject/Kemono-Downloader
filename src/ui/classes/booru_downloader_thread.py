@@ -3,6 +3,7 @@ import threading
 import time
 import datetime
 import requests
+import cloudscraper # Added cloudscraper import
 from PyQt5.QtCore import QThread, pyqtSignal
 
 from ...core.booru_client import fetch_booru_data, BooruClientException
@@ -45,8 +46,14 @@ class BooruDownloadThread(QThread):
             download_path = self.output_dir
             path_initialized = False
             
-            session = requests.Session()
-            session.headers["User-Agent"] = USERAGENT_FIREFOX
+            # Replaced requests.Session() with cloudscraper to bypass bot protection
+            scraper = cloudscraper.create_scraper()
+            
+            # Setup headers including the critical Referer header
+            download_headers = {
+                "User-Agent": USERAGENT_FIREFOX,
+                "Referer": "https://gelbooru.com/" 
+            }
 
             for item in item_generator:
                 if self.is_cancelled:
@@ -97,18 +104,24 @@ class BooruDownloadThread(QThread):
                 else:
                     try:
                         self.progress_signal.emit(f"   Downloading ({processed_count}/{cumulative_total}): '{final_filename}'...")
-                        response = session.get(file_url, stream=True, timeout=60)
-                        response.raise_for_status()
                         
-                        with open(filepath, 'wb') as f:
-                            for chunk in response.iter_content(chunk_size=8192):
-                                if self.is_cancelled: break
-                                f.write(chunk)
+                        # Use scraper instead of session, and pass headers
+                        response = scraper.get(file_url, headers=download_headers, stream=True, timeout=60)
                         
-                        if not self.is_cancelled:
-                            download_count += 1
+                        # Only save the file if the server actually sent the image (200 OK)
+                        if response.status_code == 200:
+                            with open(filepath, 'wb') as f:
+                                for chunk in response.iter_content(chunk_size=8192):
+                                    if self.is_cancelled: break
+                                    f.write(chunk)
+                            
+                            if not self.is_cancelled:
+                                download_count += 1
+                            else:
+                                if os.path.exists(filepath): os.remove(filepath)
+                                skip_count += 1
                         else:
-                            if os.path.exists(filepath): os.remove(filepath)
+                            self.progress_signal.emit(f"   ❌ Blocked by server (Error {response.status_code}) for '{final_filename}'")
                             skip_count += 1
                             
                     except Exception as e:

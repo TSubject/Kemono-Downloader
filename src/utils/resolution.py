@@ -190,25 +190,27 @@ def setup_ui(main_app):
     file_filter_layout.addLayout(radio_button_layout)
     left_layout.addLayout(file_filter_layout)
 
+    # --- NEW RULE34 CREDENTIALS & SETTINGS LAYOUT ---
+    # --- UNIFIED BOORU CREDENTIALS LAYOUT ---
     main_app.booru_inputs_widget = QWidget()
     booru_inputs_layout = QHBoxLayout(main_app.booru_inputs_widget)
     booru_inputs_layout.setContentsMargins(0, 5, 0, 0)
     
-    main_app.api_key_label = QLabel("API Key:")
-    main_app.api_key_input = QLineEdit()
-    main_app.api_key_input.setPlaceholderText("Danbooru, Gelbooru, or Rule34 API Key")
+    # The Single Input for ALL Boorus
+    main_app.booru_creds_input = QLineEdit()
+    main_app.booru_creds_input.setPlaceholderText("Paste '&api_key=...&user_id=...' here")
+    main_app.booru_creds_input.setToolTip("Paste your raw API string directly from the URL bar for Gelbooru, Danbooru, or Rule34")
     
-    main_app.user_id_label = QLabel("User ID:")
-    main_app.user_id_input = QLineEdit()
-    main_app.user_id_input.setPlaceholderText("Username or Rule34 User ID")
-   
-    booru_inputs_layout.addWidget(main_app.api_key_label)
-    booru_inputs_layout.addWidget(main_app.api_key_input, 1)
-    booru_inputs_layout.addSpacing(10)
-    booru_inputs_layout.addWidget(main_app.user_id_label)
-    booru_inputs_layout.addWidget(main_app.user_id_input, 1)
+    # The Settings Button (Only for Rule34)
+    main_app.rule34_settings_btn = QPushButton("⚙️ Rule34 Settings")
+    main_app.rule34_settings_btn.setCursor(Qt.PointingHandCursor)
+    
+    booru_inputs_layout.addWidget(main_app.booru_creds_input, stretch=3)
+    booru_inputs_layout.addWidget(main_app.rule34_settings_btn, stretch=1)
+    
     left_layout.addWidget(main_app.booru_inputs_widget)
     main_app.booru_inputs_widget.setVisible(False)
+    # ------------------------------------------------
 
     checkboxes_group_layout = QVBoxLayout()
     checkboxes_group_layout.setSpacing(10)

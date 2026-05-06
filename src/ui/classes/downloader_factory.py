@@ -35,8 +35,7 @@ def create_downloader_thread(main_app, api_url, service, id1, id2, effective_out
 
 
     if service in ['danbooru', 'gelbooru']:
-        api_key = main_app.api_key_input.text().strip()
-        user_id = main_app.user_id_input.text().strip()
+        api_key, user_id = main_app.get_booru_credentials()
         return BooruDownloadThread(
             url=api_url, output_dir=effective_output_dir_for_run,
             api_key=api_key, user_id=user_id, parent=main_app
@@ -61,8 +60,7 @@ def create_downloader_thread(main_app, api_url, service, id1, id2, effective_out
     if service == 'rule34':
         main_app.log_signal.emit("ℹ️ Rule34 URL detected. Starting dedicated downloader.")
         
-        api_key = main_app.api_key_input.text().strip()
-        user_id = main_app.user_id_input.text().strip()
+        api_key, user_id = main_app.get_booru_credentials()
         
         return Rule34DownloadThread(api_url, effective_output_dir_for_run, api_key, user_id, main_app)
     if 'mangadex.org' in api_url:

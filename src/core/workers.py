@@ -889,7 +889,7 @@ class PostProcessorWorker:
                 
                 if getattr(self, 'visual_sort_active', False) and (is_image(final_save_path) or is_video(final_save_path)) and not post_level_match and not file_level_match and not skip_ai_for_unknowns:
                     try:
-                        models_dir = os.path.abspath(os.path.join("appdata", "models"))
+                        models_dir = os.path.join(self.app_base_dir, "appdata", "models")
                         model_path = os.path.join(models_dir, "model.onnx")
                         csv_path = os.path.join(models_dir, "selected_tags.csv")
                         
