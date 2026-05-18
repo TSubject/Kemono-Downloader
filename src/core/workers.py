@@ -19,6 +19,8 @@ from urllib .parse import urlparse
 import requests
 import cloudscraper 
 import shutil
+import imagehash
+from ..core.database_manager import DatabaseManager
 try:
     from PIL import Image
 except ImportError:
@@ -219,6 +221,12 @@ class PostProcessorWorker:
         self.download_revisions = download_revisions
         self.visual_sort_active = visual_sort_active 
         self.user_data_path = user_data_path
+        
+        # 🔹 KEMONO ONLY: Only initialize the database if downloading from Kemono!
+        if 'kemono' in self.api_url_input.lower():
+            self.db = DatabaseManager()
+        else:
+            self.db = None
 
 
         if self.compress_images and Image is None:
@@ -997,6 +1005,30 @@ class PostProcessorWorker:
 
                 final_filename_saved_for_return = final_filename_on_disk
                 self.logger(f"✅ Saved: '{final_filename_saved_for_return}' (from '{api_original_filename}', {downloaded_size_bytes / (1024 * 1024):.2f} MB) in '{os.path.basename(effective_save_folder)}'")
+
+                # ==========================================
+                # NEW: SAVE TO TAGLESS DATABASE (KEMONO ONLY)
+                # ==========================================
+                if getattr(self, 'db', None):
+                    actual_final_path = os.path.join(effective_save_folder, final_filename_saved_for_return)
+                    calculated_phash = None
+                    valid_exts = {'.jpg', '.jpeg', '.png', '.bmp', '.webp'}
+                    
+                    if os.path.splitext(actual_final_path)[1].lower() in valid_exts and Image:
+                        try:
+                            calculated_phash = str(imagehash.phash(Image.open(actual_final_path), hash_size=16))
+                        except Exception:
+                            pass
+                    
+                    # We use the 'calculated_file_hash' that your worker already generated
+                    # earlier in the download stream to save CPU power!
+                    self.db.record_tagless_download(
+                        file_path=actual_final_path,
+                        file_name=final_filename_saved_for_return,
+                        file_hash=calculated_file_hash, 
+                        phash=calculated_phash
+                    )
+                # ==========================================
 
                 downloaded_file_details = {
                     'disk_filename': final_filename_saved_for_return,

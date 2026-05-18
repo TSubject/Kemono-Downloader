@@ -1,11 +1,19 @@
 import os
 import json
+import sqlite3
 import requests
 import html
 import re
 import datetime
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from urllib.parse import urlparse, parse_qs
 from PyQt5.QtCore import QThread, pyqtSignal
+
+from PIL import Image
+import imagehash
+# Import the DatabaseManager from your core folder
+from ...core.database_manager import DatabaseManager
 
 class Rule34DownloadThread(QThread):
     finished_signal = pyqtSignal(int, int, bool)
@@ -18,6 +26,13 @@ class Rule34DownloadThread(QThread):
         self.user_id = user_id
         self.main_app = parent
         self.session = requests.Session()
+        
+        # --- NEW: Threading Lock & Worker Limit ---
+        self.db_lock = threading.Lock()
+        self.max_workers = 4 
+        
+        # Initialize the SQLite Database Manager
+        self.db = DatabaseManager()
         
         self.session.headers.update({
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
@@ -37,13 +52,13 @@ class Rule34DownloadThread(QThread):
         self.active_whitelist = [word.strip().lower() for word in whitelist_str.split(',') if word.strip()]
         
         if settings.value("r34_exclude_gore", False, type=bool):
-            self.active_blacklist.extend(['guro', 'amputat', 'decapitat', 'disembowel', 'mutilat', 'impal', 'torture', 'prolapse', 'viscera', 'autopsy', 'vivisection'])
+            self.active_blacklist.extend(['ryona', 'guro', 'amputat', 'decapitat', 'disembowel', 'mutilat', 'impal', 'torture', 'prolapse', 'viscera', 'autopsy', 'vivisection'])
         if settings.value("r34_exclude_scat", False, type=bool):
             self.active_blacklist.extend(['scat', 'feces', 'urine', 'watersports', 'vomit', 'puke', 'copro', 'defecat', 'smegma', 'gaper', "fart"])
         if settings.value("r34_exclude_furry", False, type=bool):
             self.active_blacklist.extend(['bestiality', 'zoophil', 'feral', 'animal_genitalia', 'animal_penis', 'animal_sex', 'furry', 'anthro'])
         if settings.value("r34_exclude_loli", False, type=bool):
-            self.active_blacklist.extend(['loli', 'shota', 'underage', 'child', 'toddler', 'infant', 'pedoph', 'cub'])
+            self.active_blacklist.extend(['loli', 'shota', 'underage', 'toddler', 'infant', 'pedoph', 'cub'])
             
         if settings.value("r34_exclude_vore", False, type=bool):
             self.active_blacklist.extend(['vore', 'cannibalism', 'unbirth', 'absorption', 'digestion'])
@@ -52,7 +67,12 @@ class Rule34DownloadThread(QThread):
         if settings.value("r34_exclude_necro", False, type=bool):
             self.active_blacklist.extend(['necrophilia', 'dead', 'corpse', 'zombie', 'rotting', 'decay'])
             
-        self.exact_match_dangers = ['rape', 'gore', 'blood']
+        self.active_blacklist.extend([
+            'rape', 'gore', 'blood',
+            'literal_spitroast', 'scaphism', 'what_the_fuck', 'itt', 
+            'where_is_your_god_now', 'what_has_science_done', 'abortion_mark'
+        ])
+        
         self.rating_filter = int(settings.value("r34_rating_filter", 0))
         self.min_score = int(settings.value("r34_min_score", 0))
         self.max_downloads = int(settings.value("r34_max_downloads", 0))
@@ -81,7 +101,7 @@ class Rule34DownloadThread(QThread):
                     self.alias_map[a.strip().lower()] = master
 
         # ==========================================
-        # LOAD CHARACTER JSON DATABASE
+        # LOAD CHARACTER SQLITE DATABASE
         # ==========================================
         self.smart_sort = settings.value("r34_smart_sort", False, type=bool)
         self.known_characters_exact = set()
@@ -92,47 +112,73 @@ class Rule34DownloadThread(QThread):
         self.dynamic_penalized_tags = set()
 
         if self.smart_sort:
-            char_json_path = os.path.join(self.main_app.user_data_path, "characters.json")
+            char_db_path = os.path.join(self.main_app.user_data_path, "characters.db")
             
-            if os.path.exists(char_json_path):
+            if os.path.exists(char_db_path):
                 try:
-                    with open(char_json_path, 'r', encoding='utf-8') as f:
-                        data = json.load(f)
-                        if "favorites" in data:
-                            for tag in data["favorites"]:
-                                self._process_json_tag(tag, is_favorite=True)
-                        if "tags" in data:
-                            for tag in data["tags"]:
-                                self._process_json_tag(tag, is_favorite=False)
+                    with sqlite3.connect(char_db_path) as conn:
+                        cursor = conn.cursor()
+                        cursor.execute("SELECT raw_string, is_favorite FROM Characters")
+                        rows = cursor.fetchall()
+                        
+                        for raw_string, is_favorite in rows:
+                            self._process_character_tag(raw_string, is_favorite=bool(is_favorite))
                 except Exception as e:
-                    self.main_app.log_signal.emit(f"[WARN] Failed to parse characters.json: {e}")
+                    self.main_app.log_signal.emit(f"[WARN] Failed to read characters.db: {e}")
 
         # ==========================================
         # ANTI-DUPLICATE HASH DATABASE
         # ==========================================
         self.hash_db_path = os.path.join(self.main_app.user_data_path, "downloaded_hashes.json")
-        self.known_hashes = set()
+        self.hash_db = {}
+        self.all_known_hashes = set()
         
         if os.path.exists(self.hash_db_path):
             try:
                 with open(self.hash_db_path, 'r', encoding='utf-8') as f:
-                    self.known_hashes = set(json.load(f))
+                    data = json.load(f)
+                    if isinstance(data, list):
+                        self.hash_db = {"Legacy_Migrations": data}
+                        self.all_known_hashes = set(data)
+                    elif isinstance(data, dict):
+                        self.hash_db = data
+                        for hash_list in data.values():
+                            self.all_known_hashes.update(hash_list)
             except Exception as e:
                 self.main_app.log_signal.emit(f"[WARN] Failed to read hash database: {e}")
 
-    def _process_json_tag(self, tag, is_favorite):
+    def _process_character_tag(self, tag, is_favorite):
+        if '=' in tag:
+            master_part, aliases_part = tag.split('=', 1)
+            
+            clean_master = html.unescape(master_part.strip()).lower()
+            clean_master = re.sub(r'\s+', '_', clean_master)
+            clean_master = re.sub(r'_+', '_', clean_master)
+            
+            for alias in aliases_part.split(','):
+                clean_alias = html.unescape(alias.strip()).lower()
+                clean_alias = re.sub(r'\s+', '_', clean_alias)
+                clean_alias = re.sub(r'_+', '_', clean_alias)
+                if clean_alias:
+                    self.alias_map[clean_alias] = clean_master
+                    
+            tag = master_part
+
         is_penalized = '*' in tag
         if is_penalized:
             tag = tag.replace('*', '')
             
-        clean_tag = html.unescape(tag).replace(' ', '_').lower()
+        tag = tag.strip()
+        clean_tag = html.unescape(tag).lower()
+        clean_tag = re.sub(r'\s+', '_', clean_tag)
+        clean_tag = re.sub(r'_+', '_', clean_tag)
+        
         self.known_characters_exact.add(clean_tag)
         
         match = re.search(r'^(.*?)_\(([^)]+)\)$', clean_tag)
         if match:
             base_name = match.group(1)
             franchise = match.group(2)
-            
             self.known_franchises.add(franchise.replace('_', ' '))
             
             if base_name not in self.known_characters_base:
@@ -141,7 +187,8 @@ class Rule34DownloadThread(QThread):
         else:
             base_name = clean_tag
         
-        name_fingerprint = tuple(sorted(base_name.split('_')))
+        fingerprint_parts = [p for p in base_name.split('_') if p]
+        name_fingerprint = tuple(sorted(fingerprint_parts))
         self.known_characters_unordered[name_fingerprint] = base_name
         
         if is_penalized:
@@ -151,27 +198,33 @@ class Rule34DownloadThread(QThread):
             self.favorite_characters.add(base_name.replace('_', ' '))
 
     def is_safe_to_download(self, tags_string):
-        if not self.active_blacklist and not self.exact_match_dangers:
+        if not self.active_blacklist:
             return True, "normal", ""
             
         image_tags = tags_string.lower().split()
-        for tag in image_tags:
-            if tag in self.active_whitelist: return True, "vip", tag
-
-        safe_tags_list = [
-            'not_furry', 'fake_animal_ears', 'fake_tail', 'animal_ears', 
-            'blood_type_a', 'blood_type_b', 'blood_type_ab', 'blood_type_o', 
-            'first_blood' 
-        ]
         
+        # 1. VIP Whitelist completely overrides everything
         for tag in image_tags:
-            if tag in safe_tags_list or tag.startswith('not_'): continue 
-            if tag in self.exact_match_dangers: return False, "exact", tag
+            if tag in self.active_whitelist: 
+                return True, "vip", tag
+
+        for tag in image_tags:
+            # Safely ignore negation tags (e.g., "not_furry")
+            if tag.startswith('not_'): 
+                continue 
                 
-            tag_pieces = tag.split('_')
+            # 2. Smart Booru-Style Blacklist Evaluation
             for bad_word in self.active_blacklist:
-                if bad_word in tag_pieces or bad_word == tag: return False, "wildcard", bad_word
-                    
+                if '*' in bad_word:
+                    # User explicitly requested a wildcard (e.g., *spider*)
+                    clean_pattern = bad_word.replace('*', '')
+                    if clean_pattern in tag:
+                        return False, "wildcard", bad_word
+                else:
+                    # EXACT MATCH ONLY! (Prevents 'spider' from blocking 'spider_man')
+                    if tag == bad_word:
+                        return False, "blacklist", bad_word
+                        
         return True, "normal", ""
 
     def get_tag_count(self, tag_name):
@@ -217,6 +270,54 @@ class Rule34DownloadThread(QThread):
 
         return count
 
+    # ==========================================
+    # 🔹 NEW: THREAD-SAFE DOWNLOAD WORKER
+    # ==========================================
+    def _execute_download_task(self, file_url, save_path, file_hash, post_tags_list, search_category, post, log_folder_path, safe_type, trigger_word, original_tags):
+        """Runs concurrently in the background without touching the main UI directly."""
+        if self.main_app.cancellation_event.is_set(): 
+            return False, ""
+
+        if self.download_file(file_url, save_path):
+            calculated_phash, hash_warn = self.calculate_phash_safe(save_path)
+            
+            # --- PROTECT DATABASE INJECTIONS ---
+            with self.db_lock:
+                if file_hash:
+                    if file_hash not in self.hash_db[search_category]:
+                        self.hash_db[search_category].append(file_hash)
+                    self.all_known_hashes.add(file_hash)
+                
+                self.db.record_download(
+                    file_path=save_path,
+                    file_name=os.path.basename(save_path),
+                    file_hash=file_hash,
+                    tags_list=post_tags_list,
+                    phash=calculated_phash
+                )
+
+            # Build the log string (do not emit here!)
+            score_val = post.get('score', '0')
+            rating_val = post.get('rating', 'q').upper()
+            res = f"{post.get('width', '?')}x{post.get('height', '?')}"
+            
+            log_lines = [f"\n[+] POST {post.get('id', 'Unknown')}"]
+            log_lines.append(f"    Stats   : Score {score_val} | Rating {rating_val} | Res {res}")
+            
+            if safe_type == "vip":
+                if trigger_word not in original_tags.lower():
+                    log_lines.append(f"    Bypass  : Whitelist triggered by '{trigger_word}'")
+                
+            log_lines.append(f"    File    : {os.path.basename(save_path)}")
+            log_lines.append(f"    Path    : [{' / '.join(log_folder_path)}]")
+            
+            if hash_warn:
+                log_lines.append(f"    {hash_warn}")
+                    
+            return True, "\n".join(log_lines)
+            
+        return False, ""
+
     def run(self):
         parsed_url = urlparse(self.url)
         query_params = parse_qs(parsed_url.query)
@@ -236,7 +337,7 @@ class Rule34DownloadThread(QThread):
         
         start_msg = f"""
 ┌───────────────────────────────────────────────────────────────────────
-│ RULE34 DOWNLOAD SEQUENCE INITIATED
+│ ⚡ TURBO DOWNLOAD SEQUENCE INITIATED ({self.max_workers} Workers)
 ├───────────────────────────────────────────────────────────────────────
 │ Timestamp   : {now}
 │ Query Tags  : {tags}
@@ -273,13 +374,16 @@ class Rule34DownloadThread(QThread):
 
                 self.main_app.log_signal.emit(f"\n[NETWORK] Fetching Page {pid + 1} | Retrieved {len(posts)} indices...")
 
+                # --- NEW: Task Queue for the current page ---
+                download_tasks = []
+
                 for post in posts:
                     if self.main_app.cancellation_event.is_set(): break
                     if not isinstance(post, dict): continue
 
-                    if self.max_downloads > 0 and total_count >= self.max_downloads:
-                        self.main_app.log_signal.emit(f"\n[CONSTRAINT] Maximum download limit ({self.max_downloads}) reached. Terminating sequence.")
-                        self.main_app.cancellation_event.set()
+                    # Ensures the queue doesn't grab more files than your max download limit allows
+                    if self.max_downloads > 0 and (total_count + len(download_tasks)) >= self.max_downloads:
+                        self.main_app.log_signal.emit(f"\n[CONSTRAINT] Maximum download limit ({self.max_downloads}) reached on queue. Terminating sequence.")
                         break
 
                     if int(post.get('score', 0)) < self.min_score: continue
@@ -313,8 +417,12 @@ class Rule34DownloadThread(QThread):
                     file_hash = post.get('hash', '')
                     post_id = post.get('id', 'Unknown')
                     
-                    if file_hash and file_hash in self.known_hashes:
-                        self.main_app.log_signal.emit(f"[SKIP] Post {post_id} | Reason: MD5 Hash present in local database.")
+                    search_category = tags.strip()
+                    if search_category not in self.hash_db:
+                        self.hash_db[search_category] = []
+
+                    if file_hash and file_hash in self.all_known_hashes:
+                        self.main_app.log_signal.emit(f"[SKIP] Post {post_id} | Reason: MD5 Hash present in local JSON database.")
                         continue
 
                     filename = f"{post_id}{ext}"
@@ -331,29 +439,39 @@ class Rule34DownloadThread(QThread):
                         
                         for t in post_tags_list:
                             if t in ignored_chars: continue
+                            
                             if t in self.known_characters_exact:
                                 found_chars.append(t.replace('_', ' '))
                                 continue
                                 
                             base_t = re.sub(r'_\([^)]+\)$', '', t)
+                            if base_t in ignored_chars: continue
+                            
                             if base_t != t: 
-                                if base_t in ignored_chars: continue
                                 if base_t in self.known_characters_base or base_t in self.known_characters_exact:
                                     found_chars.append(base_t.replace('_', ' '))
-                                continue
+                                    continue 
                                 
                             if t in self.known_characters_base:
                                 required_franchises = self.known_characters_base[t]
                                 if any(franchise in post_tags_set for franchise in required_franchises):
                                     found_chars.append(t.replace('_', ' '))
-                                continue
+                                    continue
+                                elif t in self.known_characters_exact:
+                                    found_chars.append(t.replace('_', ' '))
+                                    continue
 
-                            name_fingerprint = tuple(sorted(base_t.split('_')))
+                            fingerprint_parts = [p for p in base_t.split('_') if p]
+                            name_fingerprint = tuple(sorted(fingerprint_parts))
+                            
                             if name_fingerprint in self.known_characters_unordered:
                                 correct_base_name = self.known_characters_unordered[name_fingerprint]
                                 if correct_base_name in self.known_characters_base:
                                     required_franchises = self.known_characters_base[correct_base_name]
+                                    
                                     if any(franchise in post_tags_set for franchise in required_franchises):
+                                        found_chars.append(correct_base_name.replace('_', ' '))
+                                    elif correct_base_name in self.known_characters_exact:
                                         found_chars.append(correct_base_name.replace('_', ' '))
                                 else:
                                     found_chars.append(correct_base_name.replace('_', ' '))
@@ -452,31 +570,41 @@ class Rule34DownloadThread(QThread):
                     os.makedirs(final_output_dir, exist_ok=True)
                     save_path = os.path.join(final_output_dir, filename)
 
-                    # ==========================================
-                    # POST ACQUISITION LOGGING
-                    # ==========================================
+                    # --- QUEUE THE TASK ---
                     if not os.path.exists(save_path):
-                        if self.download_file(file_url, save_path):
-                            total_count += 1
-                            
-                            if file_hash:
-                                self.known_hashes.add(file_hash)
-                            
-                            score_val = post.get('score', '0')
-                            rating_val = post.get('rating', 'q').upper()
-                            res = f"{post.get('width', '?')}x{post.get('height', '?')}"
-                            
-                            log_lines = [f"\n[+] POST {post_id}"]
-                            log_lines.append(f"    Stats   : Score {score_val} | Rating {rating_val} | Res {res}")
-                            
-                            if safe_type == "vip":
-                                if trigger_word not in tags.lower():
-                                    log_lines.append(f"    Bypass  : Whitelist triggered by '{trigger_word}'")
+                        download_tasks.append((file_url, save_path, file_hash, post_tags_list, search_category, post, log_folder_path, safe_type, trigger_word, tags))
+
+                # ==========================================
+                # EXECUTE THE BATCH SAFELY
+                # ==========================================
+                if download_tasks:
+                    self.main_app.log_signal.emit(f"\n[⚡ TURBO] Firing up {self.max_workers} concurrent workers for {len(download_tasks)} files...")
+                    
+                    with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
+                        futures = {executor.submit(self._execute_download_task, *task): task for task in download_tasks}
+                        
+                        # as_completed ensures we safely emit the logs on the main thread!
+                        for future in as_completed(futures):
+                            if self.main_app.cancellation_event.is_set():
+                                break
                                 
-                            log_lines.append(f"    File    : {filename}")
-                            log_lines.append(f"    Path    : [{' / '.join(log_folder_path)}]")
-                                    
-                            self.main_app.log_signal.emit("\n".join(log_lines))
+                            success, log_text = future.result()
+                            if success:
+                                total_count += 1
+                                
+                                if log_text:
+                                    self.main_app.log_signal.emit(log_text)
+                                
+                                if total_count % 50 == 0:
+                                    with self.db_lock:
+                                        try:
+                                            with open(self.hash_db_path, 'w', encoding='utf-8') as f:
+                                                json.dump(self.hash_db, f, indent=4)
+                                        except Exception: pass
+
+                # Break main loop if max downloads reached
+                if self.max_downloads > 0 and total_count >= self.max_downloads:
+                    break
 
                 pid += 1
 
@@ -486,7 +614,7 @@ class Rule34DownloadThread(QThread):
 
         try:
             with open(self.hash_db_path, 'w', encoding='utf-8') as f:
-                json.dump(list(self.known_hashes), f)
+                json.dump(self.hash_db, f, indent=4)
         except Exception as e:
             self.main_app.log_signal.emit(f"[ERROR] Could not commit hash database to disk: {e}")
 
@@ -498,6 +626,29 @@ class Rule34DownloadThread(QThread):
 └───────────────────────────────────────────────────────────────────────"""
         self.main_app.log_signal.emit(finish_msg)
         self.finished_signal.emit(total_count, 0, self.main_app.cancellation_event.is_set())
+
+    # ==========================================
+    # 🔹 NEW: SAFE PHASH CALCULATION
+    # ==========================================
+    def calculate_phash_safe(self, file_path):
+        """Generates a 256-bit Perceptual Hash. Returns (hash, warning_message)."""
+        valid_exts = {'.jpg', '.jpeg', '.png', '.bmp', '.webp'}
+        ext = os.path.splitext(file_path)[1].lower()
+        
+        if ext not in valid_exts: return None, ""
+            
+        try:
+            img = Image.open(file_path)
+            img_hash = imagehash.phash(img, hash_size=16) 
+            return str(img_hash), ""
+        except Exception as e:
+            # Returns warning as a string instead of emitting immediately!
+            return None, f"[WARN] Failed to calculate pHash for {os.path.basename(file_path)}: {e}"
+
+    def calculate_phash(self, file_path):
+        """Legacy fallback just in case other files still call this directly."""
+        hash_val, _ = self.calculate_phash_safe(file_path)
+        return hash_val
 
     def download_file(self, url, save_path):
         try:

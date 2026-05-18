@@ -4,6 +4,12 @@ import requests
 from PyQt5.QtCore import QThread, pyqtSignal
 import cloudscraper
 
+# --- NEW IMPORTS ---
+from PIL import Image
+import imagehash
+from ...core.database_manager import DatabaseManager
+# -------------------
+
 from ...core.rule34video_client import fetch_rule34video_data
 from ...utils.file_utils import clean_folder_name
 
@@ -18,6 +24,7 @@ class Rule34VideoDownloadThread(QThread):
         self.video_url = url
         self.output_dir = output_dir
         self.is_cancelled = False
+        self.db = DatabaseManager()
 
     def run(self):
         download_count = 0
@@ -69,6 +76,16 @@ class Rule34VideoDownloadThread(QThread):
                 self.progress_signal.emit(f"   Download cancelled for '{filename}'.")
             else:
                 download_count = 1
+                
+                # --- NEW TAGLESS DB SAVE ---
+                # Since it's an mp4, we don't calculate a phash
+                self.db.record_tagless_download(
+                    file_path=filepath,
+                    file_name=filename,
+                    file_hash=None,
+                    phash=None
+                )
+                # ---------------------------
         
         except Exception as e:
             self.progress_signal.emit(f"   ❌ Failed to download '{filename}': {e}")

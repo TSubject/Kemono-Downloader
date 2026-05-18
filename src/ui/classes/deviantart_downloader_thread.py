@@ -5,6 +5,13 @@ import re
 import random
 from datetime import datetime
 from PyQt5.QtCore import QThread, pyqtSignal
+
+# --- NEW IMPORTS ---
+from PIL import Image
+import imagehash
+from ...core.database_manager import DatabaseManager
+# -------------------
+
 from ...core.deviantart_client import DeviantArtClient
 from ...utils.file_utils import clean_folder_name
 
@@ -25,6 +32,9 @@ class DeviantArtDownloadThread(QThread):
         self.parent_app = parent 
         self.download_count = 0
         self.skip_count = 0
+        
+        # Initialize DB
+        self.db = DatabaseManager()
 
     def run(self):
         self.client = DeviantArtClient(logger_func=self.progress_signal.emit, proxies=self.proxies)
@@ -200,6 +210,22 @@ class DeviantArtDownloadThread(QThread):
                         if chunk:
                             f.write(chunk)
             
+            # --- NEW TAGLESS DB SAVE ---
+            calculated_phash = None
+            valid_exts = {'.jpg', '.jpeg', '.png', '.bmp', '.webp'}
+            if ext.lower() in valid_exts:
+                try:
+                    calculated_phash = str(imagehash.phash(Image.open(filepath), hash_size=16))
+                except Exception:
+                    pass
+            self.db.record_tagless_download(
+                file_path=filepath,
+                file_name=final_filename,
+                file_hash=None,
+                phash=calculated_phash
+            )
+            # ---------------------------
+
             self.download_count += 1
             
         except Exception as e:

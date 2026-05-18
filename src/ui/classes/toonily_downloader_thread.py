@@ -6,6 +6,12 @@ from urllib.parse import urlparse
 import cloudscraper
 from PyQt5.QtCore import QThread, pyqtSignal
 
+# --- NEW IMPORTS ---
+from PIL import Image
+import imagehash
+from ...core.database_manager import DatabaseManager
+# -------------------
+
 from ...core.toonily_client import (
     fetch_chapter_data as toonily_fetch_data,
     get_chapter_list as toonily_get_list
@@ -26,6 +32,7 @@ class ToonilyDownloadThread(QThread):
         self.output_dir = output_dir
         self.is_cancelled = False
         self.pause_event = parent.pause_event if hasattr(parent, 'pause_event') else threading.Event()
+        self.db = DatabaseManager()
 
     def _check_pause(self):
         if self.is_cancelled: return True
@@ -104,6 +111,22 @@ class ToonilyDownloadThread(QThread):
                             if os.path.exists(filepath): os.remove(filepath)
                             break
                         
+                        # --- NEW TAGLESS DB SAVE ---
+                        calculated_phash = None
+                        valid_exts = {'.jpg', '.jpeg', '.png', '.bmp', '.webp'}
+                        if file_extension.lower() in valid_exts:
+                            try:
+                                calculated_phash = str(imagehash.phash(Image.open(filepath), hash_size=16))
+                            except Exception:
+                                pass
+                        self.db.record_tagless_download(
+                            file_path=filepath,
+                            file_name=filename,
+                            file_hash=None,
+                            phash=calculated_phash
+                        )
+                        # ---------------------------
+
                         grand_total_dl += 1
                         time.sleep(0.2)
                 except Exception as e:

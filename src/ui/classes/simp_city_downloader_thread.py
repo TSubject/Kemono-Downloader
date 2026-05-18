@@ -11,6 +11,12 @@ import cloudscraper
 import requests
 from PyQt5.QtCore import QThread, pyqtSignal
 
+# --- NEW IMPORTS ---
+from PIL import Image
+import imagehash
+from ...core.database_manager import DatabaseManager
+# -------------------
+
 from ...core.bunkr_client import fetch_bunkr_data
 from ...core.pixeldrain_client import fetch_pixeldrain_data
 from ...core.saint2_client import fetch_saint2_data
@@ -44,6 +50,26 @@ class SimpCityDownloadThread(QThread):
         self.total_jobs_found = 0
         self.total_jobs_processed = 0
         self.processed_job_urls = set()
+        
+        # Initialize DB
+        self.db = DatabaseManager()
+
+    # --- NEW HELPER FOR SAVING TO DB ---
+    def _record_to_db(self, filepath, filename):
+        calculated_phash = None
+        valid_exts = {'.jpg', '.jpeg', '.png', '.bmp', '.webp'}
+        if os.path.splitext(filepath)[1].lower() in valid_exts:
+            try:
+                calculated_phash = str(imagehash.phash(Image.open(filepath), hash_size=16))
+            except Exception:
+                pass
+        self.db.record_tagless_download(
+            file_path=filepath,
+            file_name=filename,
+            file_hash=None,
+            phash=calculated_phash
+        )
+    # -----------------------------------
 
     def cancel(self):
         self.is_cancelled = True
@@ -140,6 +166,7 @@ class SimpCityDownloadThread(QThread):
                     if self.is_cancelled: break
                     f.write(chunk)
             if not self.is_cancelled:
+                self._record_to_db(filepath, filename)
                 with self.counter_lock: self.total_dl_count += 1
         except Exception as e:
             self.progress_signal.emit(f"      -> ❌ Image download failed for '{filename}': {e}")
@@ -181,6 +208,7 @@ class SimpCityDownloadThread(QThread):
                         self._download_album(job.get('prefetched_files', []), job_url, album_path)
                 elif job_type == 'mega' and self.should_dl_mega:
                     self.progress_signal.emit(f"\n--- Processing Service (Mega): {job_url} ---")
+                    # (Mega downloads are processed by drive_downloader, which we'll update separately if needed)
                     drive_download_mega_file(job_url, album_path, self.progress_signal.emit, self.file_progress_signal.emit)
                 elif job_type == 'gofile' and self.should_dl_gofile:
                     self.progress_signal.emit(f"\n--- Processing Service (Gofile): {job_url} ---")
@@ -200,6 +228,7 @@ class SimpCityDownloadThread(QThread):
                                     if self.is_cancelled: break
                                     f.write(chunk)
                             if not self.is_cancelled:
+                                self._record_to_db(filepath, filename)
                                 with self.counter_lock: self.total_dl_count += 1
                     except Exception as e:
                         with self.counter_lock: self.total_skip_count += 1
@@ -233,6 +262,7 @@ class SimpCityDownloadThread(QThread):
                             if self.is_cancelled: break
                             f.write(chunk)
                     if not self.is_cancelled:
+                        self._record_to_db(filepath, filename)
                         with self.counter_lock: self.total_dl_count += 1
             except Exception as e:
                 with self.counter_lock: self.total_skip_count += 1

@@ -3,6 +3,7 @@ import os
 import urllib.request
 import re
 import json
+import sqlite3 # 👈 NEW: Required for the database
 from PyQt5.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, 
     QPushButton, QCheckBox, QSpinBox, QComboBox, QGroupBox, 
@@ -44,9 +45,9 @@ HELP_CONTENT = {
         "<ul>"
         "<li><b>Enable Automatic Character Folders:</b> Turns on the primary routing engine. It scans downloaded tags for known characters and automatically creates a folder named after them.</li>"
         "<li><b>Favorites Manager:</b> Where you type character names. Uses a custom Autocomplete system. Press <i>Ctrl + Down Arrow</i> to rapidly select and lock in names.</li>"
-        "<li><b>[ Add ] Button:</b> Saves the characters permanently into your characters.json file.</li>"
+        "<li><b>[ Add ] Button:</b> Saves the characters permanently into your characters.db file.</li>"
         "<li><b>Strict Mode / Favorites Only:</b> If checked, the app will only create dedicated folders for characters in your Favorites list. Unrecognized characters are bundled into an <code>\\Unknown\\</code> folder.</li>"
-        "<li><b>[ Download Offline Tag Database ]:</b> Downloads a tag database from HuggingFace so your Autocomplete works instantly without an internet connection.</li>"
+        "<li><b>[ Download Offline Tag Database ]:</b> Downloads a tag database from HuggingFace/GitHub so your Autocomplete works instantly without an internet connection.</li>"
         "</ul>"
     ),
     "Scene Routing": (
@@ -232,16 +233,25 @@ class Rule34SettingsDialog(QDialog):
         self.main_app = main_app
         
         self.base_dir = self.main_app.app_base_dir
+        
+        # 1. Appdata setup
         self.appdata_dir = os.path.join(self.base_dir, "appdata")
         os.makedirs(self.appdata_dir, exist_ok=True)
         
-        self.CHAR_JSON_PATH = os.path.join(self.appdata_dir, "characters.json")
+        # [NEW] Point directly to our new SQLite database!
+        self.CHAR_DB_PATH = os.path.join(self.appdata_dir, "characters.db")
         
-        self.assets_dir = os.path.join(self.base_dir, "assets", "svg")
+        # 2. Reroute ONLY the SVGs to the hidden PyInstaller folder
+        if getattr(sys, 'frozen', False):
+            asset_base = sys._MEIPASS
+        else:
+            asset_base = self.base_dir
+            
+        self.assets_dir = os.path.join(asset_base, "assets", "svg")
         self.expand_icon_path = os.path.join(self.assets_dir, "large.svg")
         self.restore_icon_path = os.path.join(self.assets_dir, "minimize.svg")
         
-        self.ONLINE_CHAR_JSON_URL = "https://raw.githubusercontent.com/Yuvi63771/Rule34/main/characters.json"
+        self.ONLINE_CHAR_DB_URL = "https://raw.githubusercontent.com/Yuvi63771/Rule34/main/characters.db"
         self.GITHUB_RAW_URL = "https://raw.githubusercontent.com/Yuvi63771/Rule34/main/alliases.txt"
         
         self.setWindowTitle("⚙️ Rule34 Download Settings")
@@ -421,7 +431,7 @@ class Rule34SettingsDialog(QDialog):
         self.new_fav_input.setPlaceholderText("Ctrl+Down to harvest!")
         self.new_fav_input.textEdited.connect(self.on_text_edited)
         self.add_fav_btn = QPushButton("Add")
-        self.add_fav_btn.clicked.connect(self.add_character_to_json)
+        self.add_fav_btn.clicked.connect(self.add_character_to_db) # 👈 [NEW] DB Function!
         fav_input_layout.addWidget(self.new_fav_input)
         fav_input_layout.addWidget(self.add_fav_btn)
         char_layout.addLayout(fav_input_layout)
@@ -436,14 +446,14 @@ class Rule34SettingsDialog(QDialog):
 
         hf_layout = QHBoxLayout()
         self.hf_download_btn = QPushButton("☁️ Download Offline Tag DB")
-        self.hf_download_btn.clicked.connect(self.download_tags_from_hf)
+        self.hf_download_btn.clicked.connect(self.download_character_db)
         hf_layout.addWidget(self.hf_download_btn)
         self.hf_progress_bar = QProgressBar()
         self.hf_progress_bar.setVisible(False)
         hf_layout.addWidget(self.hf_progress_bar)
         char_layout.addLayout(hf_layout)
         
-        if os.path.exists(self.CHAR_JSON_PATH):
+        if os.path.exists(self.CHAR_DB_PATH):
             self.hf_download_btn.setText("✅ Offline Database Installed")
             self.hf_download_btn.setEnabled(False)
 
@@ -718,14 +728,17 @@ class Rule34SettingsDialog(QDialog):
         if alias_str:
             self.alias_list_widget.addItems(alias_str.split('||'))
         
-        if os.path.exists(self.CHAR_JSON_PATH):
+        # [NEW] Load Favorites directly from SQLite!
+        if os.path.exists(self.CHAR_DB_PATH):
             try:
-                with open(self.CHAR_JSON_PATH, 'r', encoding='utf-8') as f:
-                    data = json.load(f)
-                    if "favorites" in data:
-                        self.fav_list_widget.addItems(data["favorites"])
-            except Exception:
-                pass
+                with sqlite3.connect(self.CHAR_DB_PATH) as conn:
+                    cursor = conn.cursor()
+                    cursor.execute("SELECT raw_string FROM Characters WHERE is_favorite = 1")
+                    fav_rows = cursor.fetchall()
+                    if fav_rows:
+                        self.fav_list_widget.addItems([row[0] for row in fav_rows])
+            except Exception as e:
+                print(f"Failed to load favorites from DB: {e}")
 
     def accept(self):
         settings = self.main_app.settings
@@ -758,118 +771,139 @@ class Rule34SettingsDialog(QDialog):
         
         super().accept()
 
-    def add_character_to_json(self):
+    def add_character_to_db(self):
         input_text = self.new_fav_input.text()
         new_chars = [c.strip().lower() for c in input_text.split(',') if c.strip()]
         if not new_chars: return
-        if not os.path.exists(self.CHAR_JSON_PATH): return
+        if not os.path.exists(self.CHAR_DB_PATH): return
             
         try:
-            with open(self.CHAR_JSON_PATH, 'r', encoding='utf-8') as f:
-                data = json.load(f)
+            with sqlite3.connect(self.CHAR_DB_PATH) as conn:
+                cursor = conn.cursor()
+                cursor.execute('PRAGMA journal_mode=WAL;')
                 
-            if "favorites" not in data: data["favorites"] = []
-            added_count = 0
-            
-            for new_char in reversed(new_chars):
-                if new_char in data["favorites"]: continue
-                data["favorites"].insert(0, new_char)
-                if "tags" in data and new_char in data["tags"]:
-                    data["tags"].remove(new_char)
-                self.fav_list_widget.insertItem(0, new_char)
-                added_count += 1
+                for new_char in reversed(new_chars):
+                    # Clean the master name just like the downloader does
+                    master_part = new_char.split('=', 1)[0] if '=' in new_char else new_char
+                    clean_master = re.sub(r'_+', '_', re.sub(r'\s+', '_', master_part.strip().lower()))
+                    
+                    # Upsert: Insert as favorite, or upgrade existing tag to favorite!
+                    cursor.execute('''
+                        INSERT INTO Characters (character_name, gender, is_favorite, raw_string)
+                        VALUES (?, 'Unknown', 1, ?)
+                        ON CONFLICT(character_name) DO UPDATE SET 
+                            is_favorite = 1,
+                            raw_string = excluded.raw_string
+                    ''', (clean_master, new_char))
+                    
+                    # Update UI
+                    items = self.fav_list_widget.findItems(new_char, Qt.MatchExactly)
+                    if not items:
+                        self.fav_list_widget.insertItem(0, new_char)
                 
-            with open(self.CHAR_JSON_PATH, 'w', encoding='utf-8') as f:
-                json.dump(data, f, indent=4)
+                conn.commit()
                 
             self.new_fav_input.clear()
             self.completer.current_prefix = "" 
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"DB Error adding favorite: {e}")
 
     def remove_selected_favorites(self):
         selected_items = self.fav_list_widget.selectedItems()
         if not selected_items: return
         chars_to_remove = [item.text() for item in selected_items]
-        if not os.path.exists(self.CHAR_JSON_PATH): return
+        if not os.path.exists(self.CHAR_DB_PATH): return
 
         try:
-            with open(self.CHAR_JSON_PATH, 'r', encoding='utf-8') as f:
-                data = json.load(f)
-            if "favorites" not in data: data["favorites"] = []
-            if "tags" not in data: data["tags"] = []
-            
-            for char in chars_to_remove:
-                if char in data["favorites"]:
-                    data["favorites"].remove(char)
-                    data["tags"].insert(0, char) 
-                    
-            with open(self.CHAR_JSON_PATH, 'w', encoding='utf-8') as f:
-                json.dump(data, f, indent=4)
+            with sqlite3.connect(self.CHAR_DB_PATH) as conn:
+                cursor = conn.cursor()
+                cursor.execute('PRAGMA journal_mode=WAL;')
+                
+                for char_string in chars_to_remove:
+                    # Downgrade them to a normal tag by setting is_favorite to 0
+                    cursor.execute('''
+                        UPDATE Characters 
+                        SET is_favorite = 0 
+                        WHERE raw_string = ?
+                    ''', (char_string,))
+                conn.commit()
 
+            # Remove from UI
             for item in selected_items:
                 self.fav_list_widget.takeItem(self.fav_list_widget.row(item))
-        except Exception:
-            pass
+                
+        except Exception as e:
+            print(f"DB Error removing favorite: {e}")
 
     def save_credentials_to_settings(self):
         has_creds = hasattr(self.main_app, 'booru_creds_input')
         has_url = hasattr(self.main_app, 'link_input')
         if not has_creds or not has_url: return
+        
         current_creds = self.main_app.booru_creds_input.text().strip()
         current_url = self.main_app.link_input.text().strip().lower()
+        
         api_match = re.search(r'api_key=([a-zA-Z0-9_-]+)', current_creds)
         user_match = re.search(r'user_id=([0-9]+)', current_creds)
-        if "rule34.xxx" in current_url and api_match:
+        
+        # Check if the URL belongs to ANY supported Booru site
+        is_booru_url = any(site in current_url for site in ["rule34.xxx", "gelbooru.com", "danbooru.donmai.us"])
+        
+        if is_booru_url and api_match:
+            # We save it under the "r34_" key so the downloader thread can read it universally
             self.main_app.settings.setValue("r34_api_key", api_match.group(1))
-            if user_match: self.main_app.settings.setValue("r34_user_id", user_match.group(1))
-            QMessageBox.information(self, "Success", "✅ Rule34 Credentials saved!")
+            if user_match: 
+                self.main_app.settings.setValue("r34_user_id", user_match.group(1))
+            QMessageBox.information(self, "Success", "✅ Booru Credentials saved successfully!")
+        elif not is_booru_url:
+            QMessageBox.warning(self, "Invalid URL", "Please paste a valid Booru link (Rule34, Gelbooru, Danbooru) in the main window before saving credentials.")
+        else:
+            QMessageBox.warning(self, "Missing Key", "Could not find 'api_key=' in the credentials box.")
 
-    def download_tags_from_hf(self):
-        if not hasattr(self, 'ONLINE_CHAR_JSON_URL') or not self.ONLINE_CHAR_JSON_URL: 
+    def download_character_db(self):
+        if not hasattr(self, 'ONLINE_CHAR_DB_URL') or not self.ONLINE_CHAR_DB_URL: 
             return
             
         self.hf_download_btn.setEnabled(False)
         self.hf_progress_bar.setVisible(True)
         self.hf_progress_bar.setValue(0)
         
-        # Save directly to the portable appdata folder as characters.json
+        # [NEW] Save directly to the actual SQLite DB path! No more temp JSON!
         self.download_thread = HuggingFaceDownloadThread(
-            self.ONLINE_CHAR_JSON_URL, 
-            self.CHAR_JSON_PATH, 
+            self.ONLINE_CHAR_DB_URL, 
+            self.CHAR_DB_PATH, 
             self
         )
         self.download_thread.progress_signal.connect(self.hf_progress_bar.setValue)
-        self.download_thread.finished_signal.connect(self.on_hf_download_finished)
+        self.download_thread.finished_signal.connect(self.on_db_download_finished)
         self.download_thread.start()
 
-    def on_hf_download_finished(self, success, message):
+    def on_db_download_finished(self, success, message):
         self.hf_progress_bar.setVisible(False)
         if success:
             self.hf_download_btn.setText("✅ Offline Database Installed")
             
-            # Instantly reload the autocomplete dictionary so the user doesn't have to restart
+            # Instantly reload the autocomplete UI with the fresh database!
             self.all_tags_cache.clear()
             self.setup_autocomplete()
+            
+            QMessageBox.information(self, "Success", "Characters database downloaded and installed successfully!")
         else:
             QMessageBox.critical(self, "Download Failed", f"Failed to fetch database: {message}")
             
         self.hf_download_btn.setEnabled(True)
 
-    # ==========================================
-    # 🧠 AUTOCOMPLETE LOGIC
-    # ==========================================
     def setup_autocomplete(self):
-        if os.path.exists(self.CHAR_JSON_PATH):
+        self.all_tags_cache = []
+        # [NEW] Pull every character into the Autocomplete Cache instantly
+        if os.path.exists(self.CHAR_DB_PATH):
             try:
-                with open(self.CHAR_JSON_PATH, 'r', encoding='utf-8') as f:
-                    data = json.load(f)
-                    if "favorites" in data:
-                        self.all_tags_cache.extend(data["favorites"])
-                    if "tags" in data:
-                        self.all_tags_cache.extend(data["tags"])
-            except Exception:
-                pass
+                with sqlite3.connect(self.CHAR_DB_PATH) as conn:
+                    cursor = conn.cursor()
+                    cursor.execute("SELECT raw_string FROM Characters")
+                    self.all_tags_cache = [row[0] for row in cursor.fetchall()]
+            except Exception as e:
+                print(f"Failed to load autocomplete from DB: {e}")
         
         self.completer = MultiCompleter([], self)
         self.completer.setFilterMode(Qt.MatchContains)

@@ -362,6 +362,12 @@ class DownloaderApp (QWidget ):
         self.setWindowTitle("Kemono Downloader v9.0.1")
         setup_ui(self)
         self._connect_signals()
+
+        if self.main_log_output: self.main_log_output.document().setMaximumBlockCount(10000)
+        if self.external_log_output: self.external_log_output.document().setMaximumBlockCount(10000)
+        if hasattr(self, 'missed_character_log_output') and self.missed_character_log_output:
+            self.missed_character_log_output.document().setMaximumBlockCount(10000)
+        
         if hasattr(self, 'character_input'):
             self.character_input.setToolTip(self._tr("character_input_tooltip", "Enter character names (comma-separated)..."))
         self.log_signal.emit(f"ℹ️ filename style loaded: '{self.manga_filename_style}'")
@@ -1590,11 +1596,16 @@ class DownloaderApp (QWidget ):
         is_rule34 = "rule34.xxx" in url_text
         is_standard_booru = "gelbooru.com" in url_text or "danbooru.donmai.us" in url_text
         
-        # Show the unified text box for ANY Booru site
+        # Show the unified text box and settings button for ANY Booru site
         if is_rule34 or is_standard_booru:
             self.booru_inputs_widget.setVisible(True)
-            # ONLY show the settings button if it's Rule34
-            self.rule34_settings_btn.setVisible(is_rule34)
+            self.rule34_settings_btn.setVisible(True) # Show for all Booru sites now!
+            
+            # Dynamically change the button text based on the site
+            if is_standard_booru:
+                self.rule34_settings_btn.setText("⚙️ Booru Settings")
+            else:
+                self.rule34_settings_btn.setText("⚙️ Rule34 Settings")
         else:
             self.booru_inputs_widget.setVisible(False)
 
