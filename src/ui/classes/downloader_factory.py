@@ -25,6 +25,8 @@ from .toonily_downloader_thread import ToonilyDownloadThread
 from .deviantart_downloader_thread import DeviantArtDownloadThread
 from .hentaifox_downloader_thread import HentaiFoxDownloadThread
 from .rule34_downloader_thread import Rule34DownloadThread
+from .hotleaks_thread import HotleaksThread  
+from .coomerfans_thread import CoomerfansThread
 
 def create_downloader_thread(main_app, api_url, service, id1, id2, effective_output_dir_for_run):
     """
@@ -143,6 +145,14 @@ def create_downloader_thread(main_app, api_url, service, id1, id2, effective_out
             main_app.pause_event, main_app.cancellation_event, main_app.actual_gui_signals, main_app
         )
 
+    if service == 'coomerfans' or 'coomerfans.com' in api_url:
+        main_app.log_signal.emit("🔎 Coomerfans URL detected. Starting dedicated scraper.")
+        return CoomerfansThread(
+            url=api_url, 
+            save_directory=effective_output_dir_for_run,
+            main_app=main_app
+        )
+
     if service == 'pixeldrain' or 'pixeldrain.com' in api_url:
         return PixeldrainDownloadThread(api_url, effective_output_dir_for_run, main_app)
 
@@ -179,6 +189,14 @@ def create_downloader_thread(main_app, api_url, service, id1, id2, effective_out
             parent=main_app
         )    
     
-    
+    # 🔹 NEW HOTLEAKS ROUTING 🔹
+    if service == 'hotleaks' or 'hotleaks.tv' in api_url or 'hotleaks.vip' in api_url:
+        main_app.log_signal.emit("🔥 Hotleaks URL detected. Starting dedicated downloader.")
+        return HotleaksThread(
+            url=api_url, 
+            save_directory=effective_output_dir_for_run,
+            main_app=main_app 
+        )
+        
     main_app.log_signal.emit(f"ℹ️ No specialized downloader found for service '{service}' and URL '{api_url[:50]}...'. Using generic downloader.")
     return None

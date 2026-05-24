@@ -24,18 +24,41 @@ class AllcomicDownloadThread(QThread):
         self.comic_url = url
         self.output_dir = output_dir
         self.is_cancelled = False
+        
+        # Link both the global Pause AND Cancel events from the main app!
         self.pause_event = parent.pause_event if hasattr(parent, 'pause_event') else threading.Event()
+        self.cancellation_event = parent.cancellation_event if hasattr(parent, 'cancellation_event') else None
         self.proxies = proxies
 
     def _check_pause(self):
-        if self.is_cancelled: return True
+        # 1. Check if the global Cancel button was pressed
+        if self.is_cancelled or (self.cancellation_event and self.cancellation_event.is_set()):
+            self.is_cancelled = True
+            return True
+            
+        # 2. Check if the global Pause button was pressed
         if self.pause_event and self.pause_event.is_set():
             self.progress_signal.emit("   Download paused...")
+            
             while self.pause_event.is_set():
-                if self.is_cancelled: return True
+                # Keep checking for Cancel even while paused!
+                if self.is_cancelled or (self.cancellation_event and self.cancellation_event.is_set()):
+                    self.is_cancelled = True
+                    return True
                 time.sleep(0.5)
+                
             self.progress_signal.emit("   Download resumed.")
+            
         return self.is_cancelled
+
+    # 🔹 SMART SLEEP: Replaces standard time.sleep() to instantly respond to cancels!
+    def _smart_sleep(self, seconds):
+        iterations = int(seconds * 10)
+        for _ in range(iterations):
+            if self._check_pause():
+                return True
+            time.sleep(0.1)
+        return False
 
     def run(self):
         grand_total_dl = 0
@@ -52,10 +75,16 @@ class AllcomicDownloadThread(QThread):
             'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8'
         })
 
-        chapters_to_download = allcomic_get_list(scraper, self.comic_url, self.progress_signal.emit, proxies=self.proxies)
+        # 🔹 Pass self._check_pause to the client
+        chapters_to_download = allcomic_get_list(scraper, self.comic_url, self.progress_signal.emit, check_pause_func=self._check_pause, proxies=self.proxies)
 
-        if not chapters_to_download:
+        if not chapters_to_download and not self.is_cancelled:
             chapters_to_download = [self.comic_url]
+
+        if self._check_pause():
+            self.file_progress_signal.emit("", None)
+            self.finished_signal.emit(grand_total_dl, grand_total_skip, self.is_cancelled)
+            return
 
         self.progress_signal.emit(f"--- Starting download of {len(chapters_to_download)} chapter(s) ---")
 
@@ -64,8 +93,11 @@ class AllcomicDownloadThread(QThread):
             
             self.progress_signal.emit(f"\n-- Processing Chapter {chapter_idx + 1}/{len(chapters_to_download)} --")
             
-            comic_title, chapter_title, image_urls = allcomic_fetch_data(scraper, chapter_url, self.progress_signal.emit, proxies=self.proxies)
+            # 🔹 Pass self._check_pause to the client
+            comic_title, chapter_title, image_urls = allcomic_fetch_data(scraper, chapter_url, self.progress_signal.emit, check_pause_func=self._check_pause, proxies=self.proxies)
             
+            if self._check_pause(): break
+
             if not image_urls:
                 self.progress_signal.emit(f"❌ Failed to get data for chapter. Skipping.")
                 continue
@@ -127,13 +159,18 @@ class AllcomicDownloadThread(QThread):
                             if attempt < max_retries - 1:
                                 wait_time = 2 * (attempt + 1)
                                 self.progress_signal.emit(f"         Retrying in {wait_time} seconds...")
-                                time.sleep(wait_time)
+                                # 🔹 SMART SLEEP INSTALLED HERE
+                                if self._smart_sleep(wait_time):
+                                    break
                             else:
                                 self.progress_signal.emit(f"   ❌ All attempts failed for '{filename}'. Skipping.")
                                 grand_total_skip += 1
                 
                 self.overall_progress_signal.emit(total_files_in_chapter, i + 1)
-                time.sleep(0.5) 
+                
+                # 🔹 SMART SLEEP INSTALLED HERE
+                if self._smart_sleep(0.5):
+                    break
             
             if self._check_pause(): break
 

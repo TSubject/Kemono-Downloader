@@ -2,8 +2,7 @@ import os
 import re as re_module
 import html
 import urllib.parse
-import requests
-
+from curl_cffi import requests as cffi_requests
 
 PATTERN_CACHE = {}
 
@@ -17,12 +16,12 @@ def re(pattern):
 
 def extract_from(txt, pos=None, default=""):
     """Returns a function that extracts text between two delimiters from 'txt'."""
-    def extr(begin, end, index=txt.find, txt=txt):
+    def extr(begin, end, txt=txt):
         nonlocal pos
         try:
             start_pos = pos if pos is not None else 0
-            first = index(begin, start_pos) + len(begin)
-            last = index(end, first)
+            first = txt.index(begin, start_pos) + len(begin)
+            last = txt.index(end, first)
             if pos is not None:
                 pos = last + len(end)
             return txt[first:last]
@@ -50,30 +49,37 @@ class BaseExtractor:
         self.log = logger
 
     def request(self, url, **kwargs):
-        """Makes an HTTP request using the session."""
+        """Makes an HTTP request using the curl_cffi session."""
         try:
-            response = self.session.get(url, **kwargs)
-            response.raise_for_status()
+            response = self.session.get(url, timeout=30, **kwargs)
+            if response.status_code >= 400:
+                self.log(f"      ❌ HTTP Error {response.status_code} for {url}")
+                return None
+                
+            if "Just a moment..." in response.text or "Checking your browser" in response.text:
+                self.log(f"      ❌ Caught by Cloudflare protection at {url}")
+                return None
+                
             return response
-        except requests.exceptions.RequestException as e:
-            self.log(f"Error making request to {url}: {e}")
+        except Exception as e:
+            self.log(f"      ❌ Error making request to {url}: {e}")
             return None
 
 class SaintAlbumExtractor(BaseExtractor):
-    """Extractor for saint.su albums."""
-    root = "https://saint2.su"
-    pattern = re(r"(?:https?://)?saint\d*\.(?:su|pk|cr|to)/a/([^/?#]+)")
+    """Extractor for saint.su & turbo.cr albums."""
+    pattern = re(r"(?:https?://)?(?:saint\d*\.(?:su|pk|cr|to)|turbo\.cr)/a/([^/?#]+)")
 
     def items(self):
         """Generator that yields all files from an album."""
         album_id = self.groups[0]
-        response = self.request(f"{self.root}/a/{album_id}")
+        
+        response = self.request(f"https://turbo.cr/a/{album_id}")
         if not response:
             return None, []
 
         extr = extract_from(response.text)
         title = extr("<title>", "<").rpartition(" - ")[0]
-        self.log(f"Downloading album: {title}")
+        self.log(f"   Downloading album: {title}")
 
         files_html = re_module.findall(r'<a class="image".*?</a>', response.text, re_module.DOTALL)
         file_list = []
@@ -96,38 +102,78 @@ class SaintAlbumExtractor(BaseExtractor):
         return title, file_list
 
 class SaintMediaExtractor(BaseExtractor):
-    """Extractor for single saint.su media links."""
-    root = "https://saint2.su"
-    pattern = re(r"(?:https?://)?saint\d*\.(?:su|pk|cr|to)(/(embe)?d/([^/?#]+))")
+    """Extractor for single saint.su & turbo.cr media links."""
+    pattern = re(r"(?:https?://)?(?:saint\d*\.(?:su|pk|cr|to)|turbo\.cr)(/(embe)?d/([^/?#]+))")
 
     def items(self):
         """Generator that yields the single file from a media page."""
         path, embed, media_id = self.groups
-        url = self.root + path
-        response = self.request(url)
-        if not response:
-            return None, []
+        
+        # 1. Fetch the initial embed page to establish session cookies
+        embed_url = f"https://turbo.cr/embed/{media_id}"
+        response = self.request(embed_url)
+        
+        title = media_id
+        if response:
+            extr = extract_from(response.text)
+            title = extr("<title>", "<").rpartition(" - ")[0] or media_id
 
-        extr = extract_from(response.text)
         file_url = ""
-        title = extr("<title>", "<").rpartition(" - ")[0] or media_id
 
-        if embed:
-            file_url = html.unescape(extr('<source src="', '"'))
-        else:
-            file_url = html.unescape(extr('<a href="', '"'))
+        # 2. Mimic the browser's background API call to get the signed URL
+        self.log(f"      🔄 Requesting signed video URL from API for ID: {media_id}")
+        api_url = f"https://turbo.cr/api/sign?v={media_id}"
+        
+        try:
+            # Pass the embed_url as the Referer to make it look like a legitimate browser request
+            api_resp = self.session.get(api_url, headers={
+                "Accept": "application/json",
+                "Referer": embed_url
+            })
+            
+            if api_resp.status_code == 200:
+                data = api_resp.json()
+                if data.get("success") and data.get("url"):
+                    file_url = data["url"]
+                    self.log("      ✅ Successfully fetched signed URL.")
+        except Exception as e:
+            self.log(f"      ⚠️ API sign request failed: {e}")
+
+        # 3. Fallback: If the API fails, fall back to aggressive regex on the HTML
+        if not file_url and response:
+            clean_html = response.text.replace('\\/', '/').replace('\\"', '"')
+            turbocdn_direct = re_module.search(r'(https?://[^"\'<>\s]*\.turbocdn\.[^"\'<>\s]+)', clean_html)
+            if turbocdn_direct:
+                file_url = turbocdn_direct.group(1)
 
         if not file_url:
-            self.log("Could not find video URL on the page.")
+            self.log(f"      ❌ Could not resolve true video URL for {media_id}. The video may be deleted.")
             return title, []
 
-        filename_info = nameext_from_url(file_url)
-        filename = f"{filename_info['filename'] or media_id}.{filename_info['extension'] or 'mp4'}"
+        # Clean up any HTML entities in the URL
+        file_url = html.unescape(file_url).replace("&amp;", "&")
 
+        filename_info = nameext_from_url(file_url)
+        ext = filename_info['extension'] or 'mp4'
+        name = filename_info['filename'] or media_id
+        
+        # Clean up query params from name/ext just in case
+        name = name.split('?')[0]
+        ext = ext.split('?')[0]
+
+        filename = f"{name}.{ext}"
+
+        # 4. Bundle data for the background thread
         file_data = {
             "url": file_url,
             "filename": filename,
-            "headers": {"Referer": response.url}
+            "headers": {
+                "Referer": "https://turbo.cr/",
+                "Origin": "https://turbo.cr",
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                "Accept": "*/*"
+            },
+            "cookies": self.session.cookies.get_dict()
         }
         
         return title, [file_data]
@@ -135,20 +181,13 @@ class SaintMediaExtractor(BaseExtractor):
 
 def fetch_saint2_data(url, logger):
     """
-    Identifies the correct extractor for a saint2.su URL and returns the data.
-    
-    Args:
-        url (str): The saint2.su URL.
-        logger (function): A function to log progress messages.
-        
-    Returns:
-        tuple: A tuple containing (album_title, list_of_file_dicts).
-               Returns (None, []) if no data could be fetched.
+    Identifies the correct extractor for a saint2/turbo URL and returns the data.
     """
     extractors = [SaintMediaExtractor, SaintAlbumExtractor]
-    session = requests.Session()
+    
+    session = cffi_requests.Session(impersonate="chrome120")
     session.headers.update({
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+        'Referer': 'https://turbo.cr/'
     })
 
     for extractor_cls in extractors:
@@ -156,8 +195,8 @@ def fetch_saint2_data(url, logger):
         if match:
             extractor = extractor_cls(match, session, logger)
             album_title, files = extractor.items()
-            sanitized_title = re_module.sub(r'[<>:"/\\|?*]', '_', album_title) if album_title else "saint2_download"
+            sanitized_title = re_module.sub(r'[<>:"/\\|?*]', '_', album_title) if album_title else "turbo_cr_download"
             return sanitized_title, files
 
-    logger(f"Error: The URL '{url}' does not match a known saint2 pattern.")
+    logger(f"Error: The URL '{url}' does not match a known Saint2/Turbo pattern.")
     return None, []

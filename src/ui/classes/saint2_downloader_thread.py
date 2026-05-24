@@ -1,6 +1,7 @@
 import os
 import time
-import requests
+# 🔹 UPGRADED: Using curl_cffi for the actual download stream to bypass CDN Cloudflare
+from curl_cffi import requests as cffi_requests
 from PyQt5.QtCore import QThread, pyqtSignal
 
 from ...core.saint2_client import fetch_saint2_data
@@ -31,38 +32,50 @@ class Saint2DownloadThread(QThread):
             return
 
         album_path = os.path.join(self.output_dir, album_name)
-        try:
-            os.makedirs(album_path, exist_ok=True)
-            self.progress_signal.emit(f"   Saving to folder: '{album_path}'")
-        except OSError as e:
-            self.progress_signal.emit(f"❌ Critical error creating directory: {e}")
-            self.finished_signal.emit(0, len(files_to_download), self.is_cancelled)
-            return
+        os.makedirs(album_path, exist_ok=True)
+        self.progress_signal.emit(f"   Saving to folder: '{album_name}'")
 
-        total_files = len(files_to_download)
-        session = requests.Session()
+        # 🔹 Create a persistent session that mimics Chrome to bypass the CDN
+        session = cffi_requests.Session(impersonate="chrome120")
 
-        for i, file_data in enumerate(files_to_download):
+        for file_data in files_to_download:
             if self.is_cancelled:
-                self.progress_signal.emit("   Download cancelled by user.")
-                skip_count = total_files - download_count
                 break
 
-            filename = file_data.get('filename', f'untitled_{i+1}.mp4')
             file_url = file_data.get('url')
-            headers = file_data.get('headers')
+            filename = file_data.get('filename', 'video.mp4')
             filepath = os.path.join(album_path, filename)
-            
+
             if os.path.exists(filepath):
-                self.progress_signal.emit(f"   -> Skip ({i+1}/{total_files}): '{filename}' already exists.")
+                self.progress_signal.emit(f"   -> Skip: '{filename}' already exists.")
                 skip_count += 1
                 continue
 
-            self.progress_signal.emit(f"   Downloading ({i+1}/{total_files}): '{filename}'...")
-            
             try:
-                response = session.get(file_url, stream=True, headers=headers, timeout=60)
+                # 🔹 Extract both headers and cookies from the client
+                headers = file_data.get('headers', {'Referer': self.saint2_url})
+                req_cookies = file_data.get('cookies', {})
+                
+                self.progress_signal.emit(f"       -> Downloading video stream: '{filename}'...")
+                
+                # 🔹 DEBUG LOGS: Print exactly what is being sent to the CDN
+                self.progress_signal.emit(f"       -> [DEBUG] Actual Link: {file_url}")
+                self.progress_signal.emit(f"       -> [DEBUG] Cookies Transferred: {len(req_cookies)} cookies found.")
+                
+                # 🔹 Inject the cookies into the session.get() request!
+                response = session.get(file_url, stream=True, timeout=120, headers=headers, cookies=req_cookies)
+                
+                # 🔹 DEBUG LOGS: Print exactly what the CDN replied with
+                content_type = response.headers.get('Content-Type', 'Unknown')
+                self.progress_signal.emit(f"       -> [DEBUG] CDN Response: {response.status_code} | Content-Type: {content_type}")
+                
                 response.raise_for_status()
+
+                # 🔹 CRITICAL CHECK: Abort if it's an HTML page disguised as an MP4!
+                if 'text/html' in content_type:
+                    self.progress_signal.emit(f"   ❌ Blocked by CDN! Received a 42KB HTML error page instead of a video.")
+                    skip_count += 1
+                    continue
 
                 total_size = int(response.headers.get('content-length', 0))
                 downloaded_size = 0
@@ -88,10 +101,6 @@ class Saint2DownloadThread(QThread):
                     self.file_progress_signal.emit(filename, (total_size, total_size))
 
                 download_count += 1
-            except requests.exceptions.RequestException as e:
-                self.progress_signal.emit(f"   ❌ Failed to download '{filename}'. Error: {e}")
-                if os.path.exists(filepath): os.remove(filepath)
-                skip_count += 1
             except Exception as e:
                 self.progress_signal.emit(f"   ❌ An unexpected error occurred with '{filename}': {e}")
                 if os.path.exists(filepath): os.remove(filepath)
@@ -102,4 +111,4 @@ class Saint2DownloadThread(QThread):
 
     def cancel(self):
         self.is_cancelled = True
-        self.progress_signal.emit("   Cancellation signal received by Saint2 thread.")
+        self.progress_signal.emit("   Cancellation signal received by Saint2 thread...")

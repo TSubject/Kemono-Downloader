@@ -333,6 +333,50 @@ class DownloaderApp (QWidget ):
         self.last_logged_filter_mode = None
         self.last_logged_external_link_status = None
         self.allcomic_warning_shown = False 
+        # ==========================================
+        # 🔹 DYNAMIC UI PROFILES
+        # ==========================================
+        self.UI_PROFILES = {
+            'kemono': {  # Master profile (Default)
+                'enabled_radios': ['radio_all', 'radio_videos', 'radio_only_archives', 'radio_only_audio', 'radio_only_links', 'radio_more', 'radio_images'],
+                # IMPORTANT: Change these 4 strings if your checkbox variables are named differently!
+                'enabled_checkboxes': ['favorite_mode_checkbox', 'download_thumbnails_checkbox', 'scan_content_images_checkbox', 'keep_duplicates_checkbox'],
+                'advanced_enabled': True,
+                'filters_enabled': True,
+                'force_radio': None
+            },
+            'image_only': {  # For AllComic, Pixiv, Instagram
+                'enabled_radios': ['radio_images'], 
+                'enabled_checkboxes': [], 
+                'advanced_enabled': False,
+                'filters_enabled': False,
+                'force_radio': 'radio_images'
+            },
+            'erome': {
+                # Allow 'All', 'Images', and 'Videos' so they can grab mixed albums!
+                'enabled_radios': ['radio_all', 'radio_videos', 'radio_images'], 
+                'enabled_checkboxes': [], # Disable all checkboxes
+                'advanced_enabled': False, # Completely lock the Advanced Settings panel
+                'filters_enabled': False, # Disable character and skip word inputs
+                'force_radio': 'radio_all' # Force it to 'All' by default to grab the whole album
+            },
+            'deviantart': {
+                'enabled_radios': ['radio_all', 'radio_images', 'radio_only_archives'],
+                'enabled_checkboxes': [],
+                'advanced_enabled': True, 
+                'filters_enabled': False,
+                'force_radio': 'radio_all',
+                # 🔹 ADDED 'custom_rename_dialog_button' SO YOU CAN CLICK IT!
+                'allowed_advanced': ['manga_mode_checkbox', 'manga_rename_toggle_button', 'custom_rename_dialog_button']
+            },
+            'file_host': {  # For Mega, GDrive, Dropbox, Gofile
+                'enabled_radios': ['radio_all', 'radio_only_archives'],
+                'enabled_checkboxes': [],
+                'advanced_enabled': False,
+                'filters_enabled': False,
+                'force_radio': 'radio_all'
+            }
+        }
 
 
         print(f"ℹ️ Known.txt will be loaded/saved at: {self.config_file}")
@@ -359,7 +403,7 @@ class DownloaderApp (QWidget ):
         self.download_location_label_widget = None
         self.remove_from_filename_label_widget = None
         self.skip_words_label_widget = None
-        self.setWindowTitle("Kemono Downloader v9.0.2")
+        self.setWindowTitle("Kemono Downloader v9.1.2")
         setup_ui(self)
         self._connect_signals()
 
@@ -3931,6 +3975,64 @@ class DownloaderApp (QWidget ):
         self.update_ui_for_subfolders(is_subfolder_checked)
         self._update_cookie_input_visibility(is_cookie_checked)
 
+    def _apply_ui_profile(self, profile_name):
+        """Universally toggles all UI elements based on a dictionary profile."""
+        if not hasattr(self, 'UI_PROFILES'):
+            return
+            
+        profile = self.UI_PROFILES.get(profile_name, self.UI_PROFILES['kemono'])
+
+        # Helper to safely find the widget whether it's in self.ui or just self
+        def get_widget(name):
+            if hasattr(self, 'ui') and hasattr(self.ui, name):
+                return getattr(self.ui, name)
+            return getattr(self, name, None)
+
+        # 1. Update Radio Buttons
+        all_radios = ['radio_all', 'radio_videos', 'radio_only_archives', 'radio_only_audio', 'radio_only_links', 'radio_more', 'radio_images']
+        for r in all_radios:
+            widget = get_widget(r)
+            if widget:
+                widget.setEnabled(r in profile['enabled_radios'])
+
+        # Force a specific radio button to be checked (e.g. Images for AllComic)
+        if profile['force_radio']:
+            force_widget = get_widget(profile['force_radio'])
+            if force_widget:
+                force_widget.setChecked(True)
+
+        # 2. Update Checkboxes
+        all_checkboxes = ['favorite_mode_checkbox', 'download_thumbnails_checkbox', 'scan_content_images_checkbox', 'keep_duplicates_checkbox']
+        for c in all_checkboxes:
+            widget = get_widget(c)
+            if widget:
+                widget.setEnabled(c in profile['enabled_checkboxes'])
+
+        # 3. Update Advanced Settings Panel 
+        adv_widget = get_widget('advanced_settings_widget')
+        if adv_widget:
+            adv_widget.setEnabled(profile['advanced_enabled'])
+            
+            # 🔹 NEW: Selectively disable checkboxes inside Advanced Settings
+            if profile['advanced_enabled']:
+                from PyQt5.QtWidgets import QCheckBox
+                
+                # Check if this profile has a strict list of allowed advanced features
+                if 'allowed_advanced' in profile:
+                    # 1. Turn OFF every single checkbox inside the advanced panel
+                    for chk in adv_widget.findChildren(QCheckBox):
+                        chk.setEnabled(False)
+                    
+                    # 2. Turn ON only the ones explicitly allowed in the profile
+                    for allowed_name in profile['allowed_advanced']:
+                        allowed_widget = get_widget(allowed_name)
+                        if allowed_widget:
+                            allowed_widget.setEnabled(True)
+                else:
+                    # Fallback (for Kemono): Make sure all checkboxes are turned back ON
+                    for chk in adv_widget.findChildren(QCheckBox):
+                        chk.setEnabled(True)
+
     def _update_contextual_ui_elements(self, text=""):
         """Shows or hides UI elements based on the URL, like the Discord scope button."""
         
@@ -3956,56 +4058,101 @@ class DownloaderApp (QWidget ):
         url_text = self.link_input.text().strip()
         service, _, _ = extract_post_info(url_text) 
 
-        is_deviantart = (service == 'deviantart')
-        is_simpcity = (service == 'simpcity')
         is_any_discord_url = (service == 'discord')
-        is_saint2 = 'saint2.su' in url_text or 'saint2.pk' in url_text
-        is_erome = 'erome.com' in url_text 
-        is_fap_nation = 'fap-nation.com' in url_text or 'fap-nation.org' in url_text
-
-        is_specialized = service in ['bunkr', 'nhentai', 'hentai2read', 'simpcity', 'deviantart'] or is_saint2 or is_erome
+        is_simpcity = (service == 'simpcity')
+        is_saint2 = 'saint2.su' in url_text or 'saint2.pk' in url_text or 'turbo.cr' in url_text
+        is_erome = 'erome.com' in url_text
+        is_coomerfans = 'coomerfans.com' in url_text
+        is_hotleaks = 'hotleaks.tv' in url_text
         
-        is_specialized_for_disabling = service in ['bunkr', 'nhentai', 'hentai2read', 'deviantart'] or is_saint2 or is_erome
-        
+        is_specialized = service in ['bunkr', 'nhentai', 'hentai2read', 'simpcity', 'deviantart'] or is_saint2 or is_erome or is_coomerfans or is_hotleaks
+        is_specialized_for_disabling = service in ['bunkr', 'nhentai', 'hentai2read', 'deviantart'] or is_saint2 or is_erome or is_coomerfans or is_hotleaks     
+      
         self._set_ui_for_specialized_downloader(is_specialized_for_disabling)
 
         if hasattr(self, 'advanced_settings_widget'):
             self.advanced_settings_widget.setVisible(not is_simpcity)
         if hasattr(self, 'simpcity_settings_widget'):
             self.simpcity_settings_widget.setVisible(is_simpcity)
-
-        if is_deviantart:
+        
+        # ==========================================
+        # 🔹 THE NEW UNIVERSAL UI ROUTER
+        # ==========================================
+        if service == 'deviantart':
+            self._apply_ui_profile('deviantart')
+            
+            # DeviantArt specific renaming logic
             from ..config.constants import STYLE_CUSTOM
             
-            if self.manga_filename_style != STYLE_CUSTOM:
+            if getattr(self, 'manga_filename_style', None) != STYLE_CUSTOM:
                 self.log_signal.emit("ℹ️ DeviantArt mode allows only Custom Renaming format. Switched to Custom.")
-            if self.manga_mode_checkbox:
+            
+            if hasattr(self, 'manga_mode_checkbox') and self.manga_mode_checkbox:
                 self.manga_mode_checkbox.setEnabled(True)
                 self.manga_mode_checkbox.setToolTip("Enable Custom Renaming for DeviantArt")
             
             self.manga_filename_style = STYLE_CUSTOM
             
-            self._update_manga_filename_style_button_text()
+            if hasattr(self, '_update_manga_filename_style_button_text'):
+                self._update_manga_filename_style_button_text()
             
-            if self.manga_rename_toggle_button:
+            if hasattr(self, 'manga_rename_toggle_button') and self.manga_rename_toggle_button:
                 self.manga_rename_toggle_button.setEnabled(False) 
                 self.manga_rename_toggle_button.setToolTip("DeviantArt only supports Custom Renaming.")
             
-            if self.manga_mode_checkbox and self.manga_mode_checkbox.isChecked():
-                if self.manga_rename_toggle_button:
+            if hasattr(self, 'manga_mode_checkbox') and self.manga_mode_checkbox.isChecked():
+                if hasattr(self, 'manga_rename_toggle_button') and self.manga_rename_toggle_button:
                     self.manga_rename_toggle_button.setVisible(True)
                 if hasattr(self, 'custom_rename_dialog_button'):
                     self.custom_rename_dialog_button.setVisible(True)
-        else:
-            if self.manga_rename_toggle_button:
+                    
+        elif service in ['allcomic', 'pixiv', 'instagram', 'nhentai', 'hentaifox', 'hentai2read', 'mangadex'] or any(domain in url_text.lower() for domain in ['allporncomic.com', 'nhentai.net', 'hentaifox.com', 'hentai2read.com', 'mangadex.org']):
+            self._apply_ui_profile('image_only')
+            
+            # Keep Manga Renaming available for these sites!
+            if hasattr(self, 'manga_rename_toggle_button') and self.manga_rename_toggle_button:
+                self.manga_rename_toggle_button.setEnabled(True)
+            
+        elif service == 'erome' or 'erome.com' in url_text.lower() or is_coomerfans:
+            self._apply_ui_profile('erome') # Use the same profile since Coomerfans needs the exact same UI limits
+            if hasattr(self, 'manga_rename_toggle_button') and self.manga_rename_toggle_button:
                 self.manga_rename_toggle_button.setEnabled(True)
 
+        elif is_hotleaks:
+            # 🔹 HOTLEAKS UI: Disable everything and lock Media to "All"
+            self.filter_group_box.setVisible(False)
+            self.text_extractor_group.setVisible(False)
+            self.simpcity_options_group.setVisible(False)
+            self.pdf_checkbox.setEnabled(False)
+            self.zip_checkbox.setEnabled(False)
+            
+            # Show the radio group but freeze it on "All"
+            self.media_group_box.setVisible(True)
+            self.media_radio_all.setChecked(True)
+            self.media_radio_all.setEnabled(False)
+            self.media_radio_images.setEnabled(False)
+            self.media_radio_videos.setEnabled(False)
+
+        elif service in ['mega', 'google drive', 'dropbox', 'gofile']:
+            self._apply_ui_profile('file_host')
+            if hasattr(self, 'manga_rename_toggle_button') and self.manga_rename_toggle_button:
+                self.manga_rename_toggle_button.setEnabled(True)
+                
+        elif not is_specialized_for_disabling:
+            self._apply_ui_profile('kemono') # Default fallback restores Kemono UI
+            if hasattr(self, 'manga_rename_toggle_button') and self.manga_rename_toggle_button:
+                self.manga_rename_toggle_button.setEnabled(True)
+
+        # ==========================================
+        # 🔹 DISCORD LOGIC
+        # ==========================================
         is_official_discord_url = 'discord.com' in url_text and is_any_discord_url
 
         if is_official_discord_url:
             self.remove_from_filename_label_widget.setText("🔑 Discord Token:")
             self.remove_from_filename_input.setPlaceholderText("Enter your Discord Authorization Token here")
             self.remove_from_filename_input.setEchoMode(QLineEdit.Password) 
+            from ..config.constants import DISCORD_TOKEN_KEY
             saved_token = self.settings.value(DISCORD_TOKEN_KEY, "")
             if saved_token:
                 self.remove_from_filename_input.setText(saved_token)
@@ -4014,14 +4161,17 @@ class DownloaderApp (QWidget ):
             self.remove_from_filename_input.setPlaceholderText(self._tr("remove_from_filename_input_placeholder_text", "e.g., patreon, HD"))
             self.remove_from_filename_input.setEchoMode(QLineEdit.Normal)
 
-        self.discord_scope_toggle_button.setVisible(is_any_discord_url)
+        if hasattr(self, 'discord_scope_toggle_button'):
+            self.discord_scope_toggle_button.setVisible(is_any_discord_url)
         if hasattr(self, 'discord_message_limit_input'):
             self.discord_message_limit_input.setVisible(is_official_discord_url)
 
         if is_any_discord_url: 
-            self._update_discord_scope_button_text()
+            if hasattr(self, '_update_discord_scope_button_text'):
+                self._update_discord_scope_button_text()
         elif not is_specialized:
-             self.download_btn.setText(self._tr("start_download_button_text", "⬇️ Start Download"))
+            if hasattr(self, 'download_btn'):
+                 self.download_btn.setText(self._tr("start_download_button_text", "⬇️ Start Download"))
 
     def _update_discord_scope_button_text(self):
         """Updates the text of the discord scope button and the main download button."""
@@ -4131,9 +4281,14 @@ class DownloaderApp (QWidget ):
                     'url_regex': r'https?://(?:www\.)?fap-nation\.(?:com|org)/[^/\s]+/?'
                 },
                 'saint2.su': {
-                    'name': 'Saint2.su',
+                    'name': 'Saint2/Turbo',
                     'txt_file': 'saint2.su.txt',
-                    'url_regex': r'https?://saint\d*\.(?:su|pk|cr|to)/(?:a|d|embed)/[^/?#\s]+'
+                    'url_regex': r'https?://(?:saint\d*\.(?:su|pk|cr|to)|turbo\.cr)/(?:a|d|embed)/[^/?#\s]+'
+                },
+                'turbo.cr': {
+                    'name': 'Saint2/Turbo',
+                    'txt_file': 'turbo.cr.txt',
+                    'url_regex': r'https?://(?:saint\d*\.(?:su|pk|cr|to)|turbo\.cr)/(?:a|d|embed)/[^/?#\s]+'
                 },
                 'hentai2read.com': {
                     'name': 'Hentai2Read',
@@ -4189,7 +4344,7 @@ class DownloaderApp (QWidget ):
                     'fap-nation.com', 'fap-nation.org', 
                     'toonily.com', 'toonily.me',
                     'hentai2read.com',
-                    'saint2.su', 'saint2.pk',
+                    'saint2.su', 'saint2.pk', 'turbo.cr',
                     'imgur.com', 'bunkr.',
                     'hentaifox.com'
                 ]

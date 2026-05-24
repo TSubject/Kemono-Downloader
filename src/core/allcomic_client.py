@@ -5,7 +5,7 @@ import time
 import random
 from urllib.parse import urlparse
 
-def get_chapter_list(scraper, series_url, logger_func, proxies=None):
+def get_chapter_list(scraper, series_url, logger_func, check_pause_func=None, proxies=None):
     """
     Checks if a URL is a series page and returns a list of all chapter URLs if it is.
     Relies on a passed-in scraper session for connection.
@@ -19,6 +19,9 @@ def get_chapter_list(scraper, series_url, logger_func, proxies=None):
     req_timeout = (30, 120) if proxies else 30
 
     for attempt in range(max_retries):
+        if check_pause_func and check_pause_func():
+            return []
+
         try:
             response = scraper.get(series_url, headers=headers, timeout=req_timeout, proxies=proxies, verify=False)
             response.raise_for_status()
@@ -29,7 +32,14 @@ def get_chapter_list(scraper, series_url, logger_func, proxies=None):
             if attempt < max_retries - 1:
                 wait_time = (2 ** attempt) + random.uniform(0, 2)
                 logger_func(f"      Retrying in {wait_time:.1f} seconds...")
-                time.sleep(wait_time)
+                
+                # 🔹 SMART SLEEP: Listen for cancel/pause during the wait
+                if check_pause_func:
+                    for _ in range(int(wait_time * 10)):
+                        if check_pause_func(): return []
+                        time.sleep(0.1)
+                else:
+                    time.sleep(wait_time)
             else:
                 logger_func(f"   [AllComic] ❌ All attempts to check series page failed.")
                 return [] 
@@ -55,7 +65,7 @@ def get_chapter_list(scraper, series_url, logger_func, proxies=None):
         logger_func(f"   [AllComic] ❌ Error parsing chapters after successful connection: {e}")
         return []
 
-def fetch_chapter_data(scraper, chapter_url, logger_func, proxies=None):
+def fetch_chapter_data(scraper, chapter_url, logger_func, check_pause_func=None, proxies=None):
     """
     Fetches the comic title, chapter title, and image URLs for a single chapter page.
     Relies on a passed-in scraper session for connection.
@@ -70,6 +80,9 @@ def fetch_chapter_data(scraper, chapter_url, logger_func, proxies=None):
     req_timeout = (30, 120) if proxies else 30
 
     for attempt in range(max_retries):
+        if check_pause_func and check_pause_func():
+            return None, None, None
+
         try:
             response = scraper.get(chapter_url, headers=headers, timeout=req_timeout, proxies=proxies, verify=False)
             response.raise_for_status()
@@ -79,7 +92,14 @@ def fetch_chapter_data(scraper, chapter_url, logger_func, proxies=None):
             if attempt < max_retries - 1:
                 wait_time = (2 ** attempt) + random.uniform(0, 2)
                 logger_func(f"      Retrying in {wait_time:.1f} seconds...")
-                time.sleep(wait_time)
+                
+                # 🔹 SMART SLEEP: Listen for cancel/pause during the wait
+                if check_pause_func:
+                    for _ in range(int(wait_time * 10)):
+                        if check_pause_func(): return None, None, None
+                        time.sleep(0.1)
+                else:
+                    time.sleep(wait_time)
             else:
                 logger_func(f"   [AllComic] ❌ All connection attempts failed for chapter: {chapter_url}")
                 return None, None, None

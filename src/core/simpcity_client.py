@@ -6,18 +6,18 @@ import re
 from ..utils.file_utils import clean_folder_name
 import urllib.parse 
 
-def fetch_single_simpcity_page(url, logger_func, cookies=None, post_id=None):
+def fetch_single_simpcity_page(url, logger_func, cookies=None, post_id=None, check_pause_func=None):
     """
     Scrapes a single SimpCity page for images, external links, video tags, and iframes.
     """
-    # Use a standard, modern browser User-Agent
+    if check_pause_func and check_pause_func():
+        return None, [], url
+
     headers = {
         'Referer': 'https://simpcity.cr/',
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
     }
-    print(f"Debug: Cookies being sent: {cookies.keys() if cookies else 'None'}")
     try:
-        # impersonate="chrome120" perfectly fakes a real browser fingerprint to bypass Cloudflare
         response = cffi_requests.get(
             url, 
             timeout=30, 
@@ -52,18 +52,19 @@ def fetch_single_simpcity_page(url, logger_func, cookies=None, post_id=None):
 
         jobs_on_page = []
 
+        # 1. Check Images (Ignore saint2/turbo video thumbnails masquerading as images)
         image_tags = search_scope.find_all('img', class_='bbImage')
         for img_tag in image_tags:
             thumbnail_url = img_tag.get('src')
-            if not thumbnail_url or not isinstance(thumbnail_url, str) or 'saint2.su' in thumbnail_url: continue
+            if not thumbnail_url or not isinstance(thumbnail_url, str) or re.search(r'(saint2\.(su|pk|cr|to)|turbo\.cr)', thumbnail_url): continue
             full_url = thumbnail_url.replace('.md.', '.')
             filename = img_tag.get('alt', '').replace('.md.', '.') or os.path.basename(unquote(urlparse(full_url).path))
             jobs_on_page.append({'type': 'image', 'filename': filename, 'url': full_url})
             
+        # 2. Check Standard Links
         link_tags = search_scope.find_all('a', href=True)
         for link in link_tags:
             href = link.get('href', '')
-            
             actual_url = href
             if '/misc/goto?url=' in href:
                 try:
@@ -75,24 +76,27 @@ def fetch_single_simpcity_page(url, logger_func, cookies=None, post_id=None):
                     actual_url = href
             
             if re.search(r'pixeldrain\.com/[lud]/', actual_url): jobs_on_page.append({'type': 'pixeldrain', 'url': actual_url})
-            elif re.search(r'saint2\.(su|pk|cr|to)/embed/', actual_url): jobs_on_page.append({'type': 'saint2', 'url': actual_url})
+            elif re.search(r'(saint2\.(su|pk|cr|to)|turbo\.cr)/(?:a|d|embed)/', actual_url): 
+                jobs_on_page.append({'type': 'saint2', 'url': actual_url})
             elif re.search(r'bunkr\.(?:cr|si|la|ws|is|ru|su|red|black|media|site|to|ac|ci|fi|pk|ps|sk|ph)|bunkrr\.ru', actual_url): jobs_on_page.append({'type': 'bunkr', 'url': actual_url})
             elif re.search(r'mega\.(nz|io)', actual_url): jobs_on_page.append({'type': 'mega', 'url': actual_url})
             elif re.search(r'gofile\.io', actual_url): jobs_on_page.append({'type': 'gofile', 'url': actual_url})
 
+        # 3. Check direct embedded video tags
         video_tags = search_scope.find_all('video')
         for video in video_tags:
             source_tag = video.find('source')
             if source_tag and source_tag.get('src'):
                 src_url = source_tag['src']
-                if re.search(r'saint2\.(su|pk|cr|to)', src_url):
+                if re.search(r'(saint2\.(su|pk|cr|to)|turbo\.cr)', src_url):
                     jobs_on_page.append({'type': 'saint2_direct', 'url': src_url})
         
+        # 4. Check Iframes
         iframe_tags = search_scope.find_all('iframe')
         for iframe in iframe_tags:
             src_url = iframe.get('src')
             if src_url and isinstance(src_url, str):
-                if re.search(r'saint2\.(su|pk|cr|to)/embed/', src_url):
+                if re.search(r'(saint2\.(su|pk|cr|to)|turbo\.cr)/(?:a|d|embed)/', src_url):
                     jobs_on_page.append({'type': 'saint2', 'url': src_url})
 
         if jobs_on_page:

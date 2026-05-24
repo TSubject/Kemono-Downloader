@@ -234,6 +234,7 @@ def get_link_platform(url):
         if 'discord.gg' in domain or 'discord.com/invite' in domain: return 'discord invite'
         if 'pixiv.net' in domain: return 'pixiv'
         if 'kemono.su' in domain or 'kemono.party' in domain or 'kemono.cr' in domain: return 'kemono'
+        if 'hotleaks.tv' in domain or 'hotleaks.vip' in domain: return 'hotleaks'
         if 'coomer.su' in domain or 'coomer.party' in domain or 'coomer.st' in domain: return 'coomer'
         
         parts = domain.split('.')

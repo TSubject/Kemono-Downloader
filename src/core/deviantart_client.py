@@ -10,8 +10,10 @@ class DeviantArtClient:
     CLIENT_SECRET = "76b08c69cfb27f26d6161f9ab6d061a1"
     BASE_API = "https://www.deviantart.com/api/v1/oauth2"
 
-    def __init__(self, logger_func=print, proxies=None):
+    def __init__(self, logger_func=print, check_pause_func=None, proxies=None):
         self.session = requests.Session()
+        self.logger = logger_func
+        self.check_pause_func = check_pause_func  # 🔹 Let the client hear the cancel button!
         
         if proxies:
             self.session.proxies.update(proxies)
@@ -32,10 +34,19 @@ class DeviantArtClient:
             "Sec-Fetch-User": "?1",
         })
         self.access_token = None
-        self.logger = logger_func
         
         self.logged_waits = set()
         self.log_lock = threading.Lock()
+
+    # 🔹 ADD SMART SLEEP
+    def _smart_sleep(self, seconds):
+        if not self.check_pause_func:
+            time.sleep(seconds)
+            return False
+        for _ in range(int(seconds * 10)):
+            if self.check_pause_func(): return True
+            time.sleep(0.1)
+        return False
 
     def authenticate(self):
         """Authenticates using client credentials flow."""
@@ -74,6 +85,10 @@ class DeviantArtClient:
         req_timeout = 30 if self.proxies_enabled else 20
 
         while True:
+            # 🔹 Abort instantly if cancelled!
+            if self.check_pause_func and self.check_pause_func():
+                return {}
+
             try:
                 resp = self.session.get(url, params=params, timeout=req_timeout)
                                 
@@ -85,7 +100,9 @@ class DeviantArtClient:
                         sleep_time = 15 
                     
                     self._log_once(sleep_time, f"   [DeviantArt] ⚠️ Rate limit (429). Sleeping {sleep_time}s...")
-                    time.sleep(sleep_time)
+                    # 🔹 Smart sleep handles the wait while listening for Cancel
+                    if self._smart_sleep(sleep_time):
+                        return {}
                     continue
 
                 if resp.status_code == 401: 
@@ -117,7 +134,9 @@ class DeviantArtClient:
             except requests.exceptions.RequestException as e:
                 if retries < max_retries:
                     self._log_once("conn_error", f"   [DeviantArt] Connection error: {e}. Retrying...")
-                    time.sleep(backoff_delay)
+                    # 🔹 Replace time.sleep() with smart sleep!
+                    if self._smart_sleep(backoff_delay):
+                        return {}
                     retries += 1
                     continue
                 raise e

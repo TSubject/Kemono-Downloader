@@ -36,8 +36,40 @@ class DeviantArtDownloadThread(QThread):
         # Initialize DB
         self.db = DatabaseManager()
 
+    def _check_pause_cancel(self):
+        # 1. Check if the global Cancel button was pressed
+        if getattr(self, 'is_cancelled', False) or (self.cancellation_event and self.cancellation_event.is_set()):
+            self.is_cancelled = True
+            return True
+            
+        # 2. Check if the global Pause button was pressed
+        if self.pause_event and self.pause_event.is_set():
+            self.progress_signal.emit("   Download paused...")
+            
+            while self.pause_event.is_set():
+                if getattr(self, 'is_cancelled', False) or (self.cancellation_event and self.cancellation_event.is_set()):
+                    self.is_cancelled = True
+                    return True
+                time.sleep(0.5)
+                
+            self.progress_signal.emit("   Download resumed.")
+            
+        return getattr(self, 'is_cancelled', False)
+
+    def _smart_sleep(self, seconds):
+        for _ in range(int(seconds * 10)):
+            if self._check_pause_cancel(): return True
+            time.sleep(0.1)
+        return False
+
     def run(self):
-        self.client = DeviantArtClient(logger_func=self.progress_signal.emit, proxies=self.proxies)
+        self.is_cancelled = False
+        # 🔹 Pass the pause checker into the client!
+        self.client = DeviantArtClient(
+            logger_func=self.progress_signal.emit, 
+            check_pause_func=self._check_pause_cancel, 
+            proxies=self.proxies
+        )
 
         if self.proxies:
              self.progress_signal.emit(f"   🌍 Network: Using Proxy {self.proxies}")

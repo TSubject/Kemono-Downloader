@@ -9,6 +9,7 @@ from urllib.parse import urlparse
 
 import cloudscraper
 import requests
+from curl_cffi import requests as cffi_requests
 from PyQt5.QtCore import QThread, pyqtSignal
 
 # --- NEW IMPORTS ---
@@ -54,7 +55,29 @@ class SimpCityDownloadThread(QThread):
         # Initialize DB
         self.db = DatabaseManager()
 
-    # --- NEW HELPER FOR SAVING TO DB ---
+    # 🔹 NEW: Pause & Cancel Checkers
+    def _check_pause_cancel(self):
+        if self.is_cancelled or (self.parent_app and self.parent_app.cancellation_event.is_set()):
+            self.is_cancelled = True
+            return True
+            
+        if self.parent_app and self.parent_app.pause_event.is_set():
+            self.progress_signal.emit("   Download paused...")
+            while self.parent_app.pause_event.is_set():
+                if self.is_cancelled or (self.parent_app and self.parent_app.cancellation_event.is_set()):
+                    self.is_cancelled = True
+                    return True
+                time.sleep(0.5)
+            self.progress_signal.emit("   Download resumed.")
+            
+        return self.is_cancelled
+
+    def _smart_sleep(self, seconds):
+        for _ in range(int(seconds * 10)):
+            if self._check_pause_cancel(): return True
+            time.sleep(0.1)
+        return False
+
     def _record_to_db(self, filepath, filename):
         calculated_phash = None
         valid_exts = {'.jpg', '.jpeg', '.png', '.bmp', '.webp'}
@@ -69,13 +92,11 @@ class SimpCityDownloadThread(QThread):
             file_hash=None,
             phash=calculated_phash
         )
-    # -----------------------------------
 
     def cancel(self):
         self.is_cancelled = True
 
     class _ServiceLoggerAdapter:
-        """Wraps the progress signal to provide .info(), .error(), .warning() methods for other clients."""
         def __init__(self, signal_emitter, prefix=""):
             self.emit = signal_emitter
             self.prefix = prefix
@@ -88,38 +109,34 @@ class SimpCityDownloadThread(QThread):
         def warning(self, msg, *args, **kwargs): self.emit(f"{self.prefix}⚠️ WARNING: {str(msg) % args}")
 
     def _log_interceptor(self, message):
-        """Filters out verbose log messages from the simpcity_client."""
         if "[SimpCity] Scraper found" in message or "[SimpCity] Scraping page" in message:
             pass
         else:
             self.progress_signal.emit(message)
 
     def _get_enriched_jobs(self, jobs_to_check):
-        """Performs a pre-flight check on jobs to get an accurate total file count and summary."""
         if not jobs_to_check:
             return []
             
         enriched_jobs = []
-        
         bunkr_logger = self._ServiceLoggerAdapter(self.progress_signal.emit, prefix="      ")
         pixeldrain_logger = self._ServiceLoggerAdapter(self.progress_signal.emit, prefix="      ")
         saint2_logger = self._ServiceLoggerAdapter(self.progress_signal.emit, prefix="      ")
         
         for job in jobs_to_check:
+            if self._check_pause_cancel(): break # 🔹 Stop enriching if cancelled
             job_type = job.get('type')
             job_url = job.get('url')
 
-            if job_type in ['image', 'saint2_direct']:
+            if job_type in ['image', 'saint2_direct', 'saint2']:
                 enriched_jobs.append(job)
             elif (job_type == 'bunkr' and self.should_dl_bunkr) or \
-                 (job_type == 'pixeldrain' and self.should_dl_pixeldrain) or \
-                 (job_type == 'saint2' and self.should_dl_saint2):
+                 (job_type == 'pixeldrain' and self.should_dl_pixeldrain):
                 self.progress_signal.emit(f"   -> Checking {job_type} album for file count...")
                 
                 fetch_map = {
                     'bunkr': (fetch_bunkr_data, bunkr_logger),
-                    'pixeldrain': (fetch_pixeldrain_data, pixeldrain_logger),
-                    'saint2': (fetch_saint2_data, saint2_logger)
+                    'pixeldrain': (fetch_pixeldrain_data, pixeldrain_logger)
                 }
                 fetch_func, logger_adapter = fetch_map[job_type]
                 album_name, files = fetch_func(job_url, logger_adapter)
@@ -129,7 +146,7 @@ class SimpCityDownloadThread(QThread):
                     job['prefetched_album_name'] = album_name
                     enriched_jobs.append(job)
         
-        if enriched_jobs:
+        if enriched_jobs and not self.is_cancelled:
             summary_counts = Counter()
             current_page_file_count = 0
             for job in enriched_jobs:
@@ -150,7 +167,6 @@ class SimpCityDownloadThread(QThread):
         return enriched_jobs
 
     def _download_single_image(self, job, album_path, session):
-        """Downloads one image file; this is run by the image thread pool."""
         filename = job['filename']
         filepath = os.path.join(album_path, filename)
         try:
@@ -163,7 +179,10 @@ class SimpCityDownloadThread(QThread):
             response.raise_for_status()
             with open(filepath, 'wb') as f:
                 for chunk in response.iter_content(chunk_size=8192):
-                    if self.is_cancelled: break
+                    if self._check_pause_cancel(): # 🔹 Abort chunk write
+                        f.close()
+                        os.remove(filepath)
+                        return
                     f.write(chunk)
             if not self.is_cancelled:
                 self._record_to_db(filepath, filename)
@@ -177,10 +196,9 @@ class SimpCityDownloadThread(QThread):
                 self.overall_progress_signal.emit(self.total_jobs_found, self.total_jobs_processed)
 
     def _image_worker(self, album_path):
-        """Target function for the image thread pool that pulls jobs from the queue."""
         session = cloudscraper.create_scraper()
         while True:
-            if self.is_cancelled: break
+            if self._check_pause_cancel(): break # 🔹 Abort thread loop
             try:
                 job = self.image_queue.get(timeout=1)
                 if job is None: break
@@ -190,9 +208,8 @@ class SimpCityDownloadThread(QThread):
                 continue
 
     def _service_worker(self, album_path):
-        """Target function for the single service thread, ensuring sequential downloads."""
         while True:
-            if self.is_cancelled: break
+            if self._check_pause_cancel(): break # 🔹 Abort thread loop
             try:
                 job = self.service_queue.get(timeout=1)
                 if job is None: break
@@ -200,71 +217,79 @@ class SimpCityDownloadThread(QThread):
                 job_type = job['type']
                 job_url = job['url']
                 
-                if job_type in ['pixeldrain', 'saint2', 'bunkr']:
+                if job_type in ['pixeldrain', 'bunkr']:
                     if (job_type == 'pixeldrain' and self.should_dl_pixeldrain) or \
-                       (job_type == 'saint2' and self.should_dl_saint2) or \
                        (job_type == 'bunkr' and self.should_dl_bunkr):
                         self.progress_signal.emit(f"\n--- Processing Service ({job_type.capitalize()}): {job_url} ---")
                         self._download_album(job.get('prefetched_files', []), job_url, album_path)
+                
+                elif job_type in ['saint2', 'saint2_direct'] and self.should_dl_saint2:
+                    self.progress_signal.emit(f"\n--- Processing Service (Saint2/Turbo): {job_url} ---")
+                    saint2_logger = self._ServiceLoggerAdapter(self.progress_signal.emit, prefix="      ")
+                    album_name, files = fetch_saint2_data(job_url, saint2_logger)
+                    if files:
+                        self._download_album(files, job_url, album_path)
+                    with self.counter_lock: 
+                        self.total_jobs_processed += 1
+                        self.overall_progress_signal.emit(self.total_jobs_found, self.total_jobs_processed)
+                
                 elif job_type == 'mega' and self.should_dl_mega:
                     self.progress_signal.emit(f"\n--- Processing Service (Mega): {job_url} ---")
-                    # (Mega downloads are processed by drive_downloader, which we'll update separately if needed)
                     drive_download_mega_file(job_url, album_path, self.progress_signal.emit, self.file_progress_signal.emit)
                 elif job_type == 'gofile' and self.should_dl_gofile:
                     self.progress_signal.emit(f"\n--- Processing Service (Gofile): {job_url} ---")
                     download_gofile_folder(job_url, album_path, self.progress_signal.emit, self.file_progress_signal.emit)
-                elif job_type == 'saint2_direct' and self.should_dl_saint2:
-                    self.progress_signal.emit(f"\n--- Processing Service (Saint2 Direct): {job_url} ---")
-                    try:
-                        filename = os.path.basename(urlparse(job_url).path)
-                        filepath = os.path.join(album_path, filename)
-                        if os.path.exists(filepath):
-                            with self.counter_lock: self.total_skip_count += 1
-                        else:
-                            response = cloudscraper.create_scraper().get(job_url, stream=True, timeout=120, headers={'Referer': self.start_url})
-                            response.raise_for_status()
-                            with open(filepath, 'wb') as f:
-                                for chunk in response.iter_content(chunk_size=8192):
-                                    if self.is_cancelled: break
-                                    f.write(chunk)
-                            if not self.is_cancelled:
-                                self._record_to_db(filepath, filename)
-                                with self.counter_lock: self.total_dl_count += 1
-                    except Exception as e:
-                        with self.counter_lock: self.total_skip_count += 1
-                    finally:
-                        if not self.is_cancelled:
-                            with self.counter_lock: self.total_jobs_processed += 1
-                            self.overall_progress_signal.emit(self.total_jobs_found, self.total_jobs_processed)
                 
                 self.service_queue.task_done()
             except queue.Empty:
                 continue
 
     def _download_album(self, files_to_process, source_url, album_path):
-        """Helper to download all files from a pre-fetched album list."""
         if not files_to_process: return
-        session = cloudscraper.create_scraper()
+        
+        # 🔹 UPGRADED: Use curl_cffi instead of cloudscraper to bypass CDN Cloudflare!
+        session = cffi_requests.Session(impersonate="chrome120")
+        
         for file_data in files_to_process:
-            if self.is_cancelled: return
+            if self._check_pause_cancel(): return 
             filename = file_data.get('filename') or file_data.get('name')
             filepath = os.path.join(album_path, filename)
+            
             try:
                 if os.path.exists(filepath):
                     with self.counter_lock: self.total_skip_count += 1
                 else:
                     self.progress_signal.emit(f"       -> Downloading: '{filename}'...")
+                    
+                    # Grab the cookies and headers that the prefetcher bypassed Cloudflare with
                     headers = file_data.get('headers', {'Referer': source_url})
-                    response = session.get(file_data.get('url'), stream=True, timeout=180, headers=headers)
+                    req_cookies = file_data.get('cookies', {})
+                    
+                    # 🔹 Pass everything into the cffi session!
+                    response = session.get(file_data.get('url'), stream=True, timeout=180, headers=headers, cookies=req_cookies)
+                    
+                    # 🔹 SAFETY NET: Abort if Cloudflare gives us an HTML page instead of a video
+                    content_type = response.headers.get('Content-Type', '')
+                    if 'text/html' in content_type:
+                        self.progress_signal.emit(f"       ❌ Blocked by CDN! Downloaded a 42KB HTML page instead of the video.")
+                        with self.counter_lock: self.total_skip_count += 1
+                        continue
+                        
                     response.raise_for_status()
+                    
                     with open(filepath, 'wb') as f:
                         for chunk in response.iter_content(chunk_size=8192):
-                            if self.is_cancelled: break
+                            if self._check_pause_cancel(): 
+                                f.close()
+                                os.remove(filepath)
+                                return
                             f.write(chunk)
+                            
                     if not self.is_cancelled:
                         self._record_to_db(filepath, filename)
                         with self.counter_lock: self.total_dl_count += 1
             except Exception as e:
+                self.progress_signal.emit(f"       ❌ Download Error: {e}")
                 with self.counter_lock: self.total_skip_count += 1
             finally:
                 if not self.is_cancelled:
@@ -272,7 +297,6 @@ class SimpCityDownloadThread(QThread):
                     self.overall_progress_signal.emit(self.total_jobs_found, self.total_jobs_processed)
     
     def run(self):
-        """Main entry point for the thread, orchestrates the entire download."""
         self.progress_signal.emit("=" * 40)
         self.progress_signal.emit(f"🚀 Starting SimpCity Download for: {self.start_url}")
 
@@ -289,30 +313,40 @@ class SimpCityDownloadThread(QThread):
         try:
             if is_single_post_mode:
                 self.progress_signal.emit("   Mode: Single Post detected.")
-                album_title, _, _ = fetch_single_simpcity_page(self.start_url, self._log_interceptor, cookies=self.cookies, post_id=self.post_id)
+                # 🔹 Pass check_pause_func down to the client
+                album_title, _, _ = fetch_single_simpcity_page(self.start_url, self._log_interceptor, cookies=self.cookies, post_id=self.post_id, check_pause_func=self._check_pause_cancel)
                 album_path = os.path.join(self.output_dir, clean_folder_name(album_title or "simpcity_post"))
             else:
                 self.progress_signal.emit("   Mode: Full Thread detected.")
                 first_page_url = re.sub(r'(/page-\d+)|(/post-\d+)', '', self.start_url).split('#')[0].strip('/')
-                album_title, _, _ = fetch_single_simpcity_page(first_page_url, self._log_interceptor, cookies=self.cookies)
+                album_title, _, _ = fetch_single_simpcity_page(first_page_url, self._log_interceptor, cookies=self.cookies, check_pause_func=self._check_pause_cancel)
                 album_path = os.path.join(self.output_dir, clean_folder_name(album_title or "simpcity_album"))
+                
+            if self._check_pause_cancel():
+                self.finished_signal.emit(0, 0, True, [])
+                return
+                
             os.makedirs(album_path, exist_ok=True)
             self.progress_signal.emit(f"   Saving all content to folder: '{os.path.basename(album_path)}'")
         except Exception as e:
             self.progress_signal.emit(f"❌ Could not process the initial page. Aborting. Error: {e}")
             self.finished_signal.emit(0, 0, self.is_cancelled, []); return
             
-        service_thread = threading.Thread(target=self._service_worker, args=(album_path,), daemon=True)
-        service_thread.start()
+        num_service_threads = 4  
+        service_executor = ThreadPoolExecutor(max_workers=num_service_threads, thread_name_prefix='SimpCityService')
+        for _ in range(num_service_threads): 
+            service_executor.submit(self._service_worker, album_path)
+            
         num_image_threads = 15
         image_executor = ThreadPoolExecutor(max_workers=num_image_threads, thread_name_prefix='SimpCityImage')
-        for _ in range(num_image_threads): image_executor.submit(self._image_worker, album_path)
+        for _ in range(num_image_threads): 
+            image_executor.submit(self._image_worker, album_path)
 
         try:
             if is_single_post_mode:
-                _, jobs, _ = fetch_single_simpcity_page(self.start_url, self._log_interceptor, cookies=self.cookies, post_id=self.post_id)
+                _, jobs, _ = fetch_single_simpcity_page(self.start_url, self._log_interceptor, cookies=self.cookies, post_id=self.post_id, check_pause_func=self._check_pause_cancel)
                 enriched_jobs = self._get_enriched_jobs(jobs)
-                if enriched_jobs:
+                if enriched_jobs and not self.is_cancelled:
                     for job in enriched_jobs:
                         if job['type'] == 'image': 
                             if self.should_dl_images: self.image_queue.put(job)
@@ -322,13 +356,15 @@ class SimpCityDownloadThread(QThread):
                 base_url = re.sub(r'(/page-\d+)|(/post-\d+)', '', self.start_url).split('#')[0].strip('/')
                 page_counter = 1; end_of_thread = False; MAX_RETRIES = 3
                 while not end_of_thread:
-                    if self.is_cancelled: break
+                    if self._check_pause_cancel(): break # 🔹 Abort main crawl loop
                     page_url = f"{base_url}/page-{page_counter}"; retries = 0; page_fetch_successful = False
                     while retries < MAX_RETRIES:
-                        if self.is_cancelled: end_of_thread = True; break
+                        if self._check_pause_cancel(): end_of_thread = True; break
                         self.progress_signal.emit(f"\n--- Analyzing page {page_counter} (Attempt {retries + 1}/{MAX_RETRIES}) ---")
                         try:
-                            page_title, jobs_on_page, final_url = fetch_single_simpcity_page(page_url, self._log_interceptor, cookies=self.cookies)
+                            page_title, jobs_on_page, final_url = fetch_single_simpcity_page(page_url, self._log_interceptor, cookies=self.cookies, check_pause_func=self._check_pause_cancel)
+                            
+                            if self.is_cancelled: end_of_thread = True; break
                             
                             if final_url != page_url:
                                 self.progress_signal.emit(f"   -> Redirect detected from {page_url} to {final_url}")
@@ -384,7 +420,11 @@ class SimpCityDownloadThread(QThread):
                                 end_of_thread = True; break
                             elif e.response.status_code == 429: 
                                 self.progress_signal.emit(f"   -> Rate limited (429). Waiting...")
-                                time.sleep(5 * (retries + 2)); retries += 1
+                                # 🔹 Use Smart Sleep so user can cancel during a rate limit!
+                                if self._smart_sleep(5 * (retries + 2)):
+                                    end_of_thread = True
+                                    break
+                                retries += 1
                             else: 
                                 self.progress_signal.emit(f"   -> HTTP Error {e.response.status_code} on page {page_counter}. Stopping crawl.")
                                 end_of_thread = True; break
@@ -398,8 +438,12 @@ class SimpCityDownloadThread(QThread):
             self.progress_signal.emit(f"❌ A critical error occurred during the main fetch phase: {e}")
 
         self.progress_signal.emit("\n--- All pages analyzed. Waiting for background downloads to complete... ---")
+        
+        # 🔹 Unblock the queue workers by feeding them None
         for _ in range(num_image_threads): self.image_queue.put(None)
-        self.service_queue.put(None)
+        for _ in range(num_service_threads): self.service_queue.put(None)
+        
         image_executor.shutdown(wait=True)
-        service_thread.join()
+        service_executor.shutdown(wait=True)
+        
         self.finished_signal.emit(self.total_dl_count, self.total_skip_count, self.is_cancelled, [])
