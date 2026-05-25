@@ -6,9 +6,7 @@ class HotleaksClient:
         self.base_url = "https://hotleaks.tv"
         self.session = requests.Session()
         
-        # The Golden API Headers
         self.headers = {
-            # Use your real browser's User-Agent here!
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
             'X-Requested-With': 'XMLHttpRequest',
             'Accept': 'application/json',
@@ -21,17 +19,14 @@ class HotleaksClient:
         url = url.split('?')[0].strip('/')
         parts = url.split('/')
         try:
-            # Find where the domain is, the creator is the next part
             domain_idx = parts.index('hotleaks.tv')
             creator = parts[domain_idx + 1]
             
-            # If the user included /video or /photo, append it
             if len(parts) > domain_idx + 2 and parts[domain_idx + 2] in ['video', 'photo']:
                 return f"{creator}/{parts[domain_idx + 2]}"
                 
             return creator
         except (ValueError, IndexError):
-            # Fallback for weirdly formatted URLs
             return parts[-1]
 
     def decode_video_url(self, encrypted_url):

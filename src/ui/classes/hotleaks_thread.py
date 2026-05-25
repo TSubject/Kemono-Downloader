@@ -11,7 +11,7 @@ from bs4 import BeautifulSoup
 from PyQt5.QtCore import QThread, pyqtSignal
 from ...core.hotleaks_client import HotleaksClient
 
-MAX_WORKERS = 4  # Number of parallel downloads
+MAX_WORKERS = 2  
 
 class HotleaksThread(QThread):
     progress_signal = pyqtSignal(str)
@@ -29,7 +29,10 @@ class HotleaksThread(QThread):
         self.is_running = True
         self.download_count = 0
         self.skip_count = 0
-        self._count_lock = threading.Lock()  # Protects download_count / skip_count
+        self._count_lock = threading.Lock() 
+        
+        self.is_rate_limited = False
+        self.rate_limit_lock = threading.Lock()
 
     def log(self, message):
         if self.main_app and hasattr(self.main_app, 'log_signal'):
@@ -50,12 +53,28 @@ class HotleaksThread(QThread):
                 time.sleep(0.5)
         return True
 
-    # ------------------------------------------------------------------
-    # FFmpeg bootstrap (unchanged)
-    # ------------------------------------------------------------------
+    def _smart_sleep(self, seconds):
+        """Sleeps in 0.5s intervals so the user can still cancel during a wait."""
+        for _ in range(int(seconds * 2)):
+            if not self.check_pause_and_cancel():
+                return False
+            time.sleep(0.5)
+        return True
+
+    def _handle_global_rate_limit(self, item_name):
+        """Safely pauses all threads when the server issues a 429 or 403."""
+        with self.rate_limit_lock:
+            if not self.is_rate_limited:
+                self.is_rate_limited = True
+                self.log(f"   ⚠️ IP Ban/Rate limit hit on {item_name}. Pausing ALL threads for 30s to cool down...")
+                self._smart_sleep(30)
+                self.is_rate_limited = False
+                
+        while self.is_rate_limited and self.is_running:
+            time.sleep(0.5)
+
 
     def ensure_ffmpeg(self):
-        """Downloads and extracts ONLY ffmpeg.exe if it doesn't exist."""
         ffmpeg_path = os.path.join(self.main_app.app_base_dir, "ffmpeg.exe")
         if os.path.exists(ffmpeg_path):
             return True
@@ -106,9 +125,6 @@ class HotleaksThread(QThread):
                 os.remove(zip_path)
             return False
 
-    # ------------------------------------------------------------------
-    # Main run loop
-    # ------------------------------------------------------------------
 
     def run(self):
         try:
@@ -171,27 +187,23 @@ class HotleaksThread(QThread):
                         self.log(f"Could not find post {target_id} on this profile.")
                     break
 
-                # --- Collect tasks for this page, then dispatch in parallel ---
-                image_tasks = []   # [(post_id, post_url)]
-                video_tasks = []   # [(m3u8_url, post_id)]
+                image_tasks = []   
+                video_tasks = []   
                 found_target = False
 
                 for post in posts:
-                    if not self.is_running:
-                        break
+                    if not self.is_running: break
 
                     post_id = str(post.get('id'))
                     post_type = post.get('type')
 
-                    if target_id and post_id != target_id:
-                        continue
-                    if target_type != 'all' and post_type != target_type:
-                        continue
+                    if target_id and post_id != target_id: continue
+                    if target_type != 'all' and post_type != target_type: continue
 
-                    if post_type == 0:   # image
+                    if post_type == 0:
                         post_url = f"{self.client.base_url}/{creator}/photo/{post_id}"
                         image_tasks.append((post_id, post_url))
-                    elif post_type == 1:  # video
+                    elif post_type == 1:
                         encrypted_url = post.get('stream_url_play')
                         m3u8_url = self.client.decode_video_url(encrypted_url)
                         if m3u8_url:
@@ -201,12 +213,10 @@ class HotleaksThread(QThread):
                         found_target = True
                         break
 
-                # Dispatch image downloads in parallel
                 if image_tasks:
                     self.log(f"Downloading {len(image_tasks)} image(s) with {MAX_WORKERS} workers...")
                     self._run_image_tasks(image_tasks, creator_folder)
 
-                # Dispatch video downloads in parallel
                 if video_tasks:
                     self.log(f"Downloading {len(video_tasks)} video(s) with {MAX_WORKERS} workers...")
                     self._run_video_tasks(video_tasks, creator_folder)
@@ -227,12 +237,8 @@ class HotleaksThread(QThread):
         except Exception as e:
             self.log(f"Hotleaks Engine Error: {str(e)}")
 
-    # ------------------------------------------------------------------
-    # Parallel dispatchers
-    # ------------------------------------------------------------------
 
     def _run_image_tasks(self, tasks, creator_folder):
-        """Run image-post downloads in parallel."""
         with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
             futures = {
                 executor.submit(self._download_image_post, post_id, post_url, creator_folder): post_id
@@ -240,15 +246,10 @@ class HotleaksThread(QThread):
             }
             for future in as_completed(futures):
                 if not self.is_running:
-                    for f in futures:
-                        f.cancel()
+                    for f in futures: f.cancel()
                     break
-                exc = future.exception()
-                if exc:
-                    self.log(f"Image worker error: {exc}")
 
     def _run_video_tasks(self, tasks, creator_folder):
-        """Run video (HLS) downloads in parallel."""
         with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
             futures = {
                 executor.submit(self.download_video, m3u8_url, post_id, creator_folder): post_id
@@ -256,52 +257,61 @@ class HotleaksThread(QThread):
             }
             for future in as_completed(futures):
                 if not self.is_running:
-                    for f in futures:
-                        f.cancel()
+                    for f in futures: f.cancel()
                     break
-                exc = future.exception()
-                if exc:
-                    self.log(f"Video worker error: {exc}")
 
-    # ------------------------------------------------------------------
-    # Per-file downloaders  (called from worker threads — must be thread-safe)
-    # ------------------------------------------------------------------
 
     def _download_image_post(self, post_id, post_url, creator_folder):
-        """Fetches an image post page and downloads the high-res image."""
-        if not self.is_running:
-            return
+        if not self.is_running: return
+
+        while self.is_rate_limited and self.is_running: time.sleep(0.5)
 
         self.log(f"Fetching image post: {post_id}")
-        post_html = self.client.session.get(post_url, headers=self.client.headers).text
-        soup = BeautifulSoup(post_html, 'html.parser')
+        
+        post_html = None
+        for attempt in range(4):
+            res = self.client.session.get(post_url, headers=self.client.headers)
+            if res.status_code in [429, 403]:
+                self._handle_global_rate_limit(f"image {post_id}")
+                continue
+            post_html = res.text
+            break
+            
+        if not post_html: return
 
+        soup = BeautifulSoup(post_html, 'html.parser')
         photo_div = soup.find('div', class_='photo-detail')
-        if not photo_div:
-            return
+        if not photo_div: return
 
         img_tag = photo_div.find('img', class_='thumbnail')
-        if not (img_tag and 'src' in img_tag.attrs):
-            return
+        if not (img_tag and 'src' in img_tag.attrs): return
 
         image_url = img_tag['src']
         file_name = image_url.split('/')[-1].split('?')[0]
         save_path = os.path.join(creator_folder, file_name)
 
         if os.path.exists(save_path):
-            with self._count_lock:
-                self.skip_count += 1
+            with self._count_lock: self.skip_count += 1
             return
 
         self.log(f"Downloading image: {file_name}")
-        img_res = self.client.session.get(image_url, headers=self.client.headers, stream=True)
+        
+        img_res = None
+        for attempt in range(4):
+            img_res = self.client.session.get(image_url, headers=self.client.headers, stream=True)
+            if img_res.status_code in [429, 403]:
+                self._handle_global_rate_limit(f"download {file_name}")
+                continue
+            break
+            
+        if not img_res or img_res.status_code != 200: return
+
         total_size = int(img_res.headers.get('content-length', 0))
         downloaded = 0
 
         with open(save_path, 'wb') as f:
             for chunk in img_res.iter_content(chunk_size=8192):
-                if not self.check_pause_and_cancel():
-                    return
+                if not self.check_pause_and_cancel(): return
                 if chunk:
                     f.write(chunk)
                     downloaded += len(chunk)
@@ -309,36 +319,38 @@ class HotleaksThread(QThread):
                         percent = int((downloaded / total_size) * 100)
                         mb_dl = downloaded / (1024 * 1024)
                         mb_tot = total_size / (1024 * 1024)
-                        self.file_progress_signal.emit(
-                            "Image:",
-                            f"{file_name}: {percent}% ({mb_dl:.1f}MB / {mb_tot:.1f}MB)"
-                        )
+                        self.file_progress_signal.emit("Image:", f"{file_name}: {percent}% ({mb_dl:.1f}MB / {mb_tot:.1f}MB)")
 
         if self.is_running:
             self.overall_progress_signal.emit(1, 1)
-            with self._count_lock:
-                self.download_count += 1
-            self.log(f"✓ {file_name}")
+            with self._count_lock: self.download_count += 1
 
     def download_video(self, m3u8_url, post_id, folder):
-        """Downloads an HLS stream and remuxes to .mp4. Thread-safe."""
-        if not self.is_running:
-            return
+        if not self.is_running: return
 
         output_ts = os.path.join(folder, f"{post_id}.ts")
         output_mp4 = os.path.join(folder, f"{post_id}.mp4")
 
         if os.path.exists(output_mp4):
-            with self._count_lock:
-                self.skip_count += 1
+            with self._count_lock: self.skip_count += 1
             return
+
+        while self.is_rate_limited and self.is_running: time.sleep(0.5)
 
         self.log(f"Extracting video stream: {post_id}")
-        response = self.client.session.get(m3u8_url, headers=self.client.headers)
-
-        if response.status_code != 200:
-            self.log(f"Blocked on stream {post_id}. (URL likely expired)")
-            return
+        
+        response = None
+        for attempt in range(4):
+            response = self.client.session.get(m3u8_url, headers=self.client.headers)
+            if response.status_code in [429, 403]:
+                self._handle_global_rate_limit(f"stream {post_id}")
+                continue
+            elif response.status_code != 200:
+                self.log(f"   ❌ Blocked on stream {post_id}. Status Code: {response.status_code}")
+                return
+            break
+            
+        if not response or response.status_code != 200: return
 
         media_urls = []
         for line in response.text.splitlines():
@@ -350,25 +362,32 @@ class HotleaksThread(QThread):
                     line = f"{base_url}/{line}?{query}" if query else f"{base_url}/{line}"
                 media_urls.append(line)
 
-        # Recurse into nested m3u8
         if media_urls and '.m3u8' in media_urls[-1]:
             return self.download_video(media_urls[-1], post_id, folder)
 
         self.log(f"Downloading {len(media_urls)} chunks for {post_id}...")
         with open(output_ts, 'wb') as f:
             for i, chunk_url in enumerate(media_urls):
-                if not self.check_pause_and_cancel():
-                    return
-                chunk_res = self.client.session.get(chunk_url, headers=self.client.headers)
-                f.write(chunk_res.content)
-                percent = int(((i + 1) / len(media_urls)) * 100)
-                self.file_progress_signal.emit(
-                    "Native HLS:",
-                    f"{post_id}: {percent}% (Chunk {i+1}/{len(media_urls)})"
-                )
+                if not self.check_pause_and_cancel(): return
+                
+                chunk_res = None
+                for chunk_attempt in range(4):
+                    chunk_res = self.client.session.get(chunk_url, headers=self.client.headers)
+                    if chunk_res.status_code in [429, 403]:
+                        self._handle_global_rate_limit(f"chunk {i+1} of {post_id}")
+                        continue
+                    break
+                
+                if chunk_res and chunk_res.status_code == 200:
+                    f.write(chunk_res.content)
+                    percent = int(((i + 1) / len(media_urls)) * 100)
+                    self.file_progress_signal.emit("Native HLS:", f"{post_id}: {percent}% (Chunk {i+1}/{len(media_urls)})")
+                    
+                    time.sleep(0.05)
+                else:
+                    self.log(f"   ❌ Failed chunk {i+1} for {post_id}. Video may be corrupt.")
 
-        if not self.is_running:
-            return
+        if not self.is_running: return
 
         self.log(f"Remuxing: {post_id}.mp4...")
         self.file_progress_signal.emit("FFmpeg:", f"Converting {post_id} to .mp4...")
@@ -391,6 +410,3 @@ class HotleaksThread(QThread):
                     self.download_count += 1
         except Exception as e:
             self.log(f"Remux failed, stream retained as raw video: {post_id}.ts")
-
-    def stop(self):
-        self.is_running = False

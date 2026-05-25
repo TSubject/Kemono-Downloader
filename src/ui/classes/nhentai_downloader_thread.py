@@ -54,15 +54,12 @@ class NhentaiDownloadThread(QThread):
         
         img_timeout = (30, 120) if self.proxies else 60
 
-        # ... (Keep the setup code the same) ...
 
         for i, page_data in enumerate(pages_info):
             if self.is_cancelled: break
             
-            # The v2 API provides the exact path (e.g., 'galleries/2201599/1.jpg')
             page_path = page_data.get('path', '')
             
-            # Extract the extension from the path, defaulting to 'jpg' if it fails
             file_ext = page_path.split('.')[-1] if '.' in page_path else 'jpg'
             
             local_filename = f"{i+1:03d}.{file_ext}"
@@ -78,7 +75,6 @@ class NhentaiDownloadThread(QThread):
             for server in self.IMAGE_SERVERS:
                 if self.is_cancelled: break
                 
-                # The v2 API 'path' perfectly matches what the image servers expect
                 full_url = f"{server}/{page_path}"
                 
                 try:

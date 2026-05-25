@@ -6,7 +6,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from PyQt5.QtCore import QThread, pyqtSignal
 from ...core.coomerfans_client import CoomerfansClient
 
-MAX_WORKERS = 4  # Number of parallel downloads
+MAX_WORKERS = 2  
 
 class CoomerfansThread(QThread):
     progress_signal = pyqtSignal(str)
@@ -24,7 +24,10 @@ class CoomerfansThread(QThread):
         self.is_running = True
         self.download_count = 0
         self.skip_count = 0
-        self._count_lock = threading.Lock()  # Protects download_count / skip_count
+        self._count_lock = threading.Lock()  
+        
+        self.is_rate_limited = False
+        self.rate_limit_lock = threading.Lock()
 
     def log(self, message):
         if self.main_app and hasattr(self.main_app, 'log_signal'):
@@ -44,6 +47,26 @@ class CoomerfansThread(QThread):
                     return False
                 time.sleep(0.5)
         return True
+
+    def _smart_sleep(self, seconds):
+        """Sleeps in 0.5s intervals so the user can still cancel during a wait."""
+        for _ in range(int(seconds * 2)):
+            if not self.check_pause_and_cancel():
+                return False
+            time.sleep(0.5)
+        return True
+
+    def _handle_global_rate_limit(self, item_name):
+        """Safely pauses all threads when the server issues a 429 or 403."""
+        with self.rate_limit_lock:
+            if not self.is_rate_limited:
+                self.is_rate_limited = True
+                self.log(f"   ⚠️ Rate limit hit on {item_name}. Pausing ALL threads for 15s to cool down...")
+                self._smart_sleep(15)
+                self.is_rate_limited = False
+                
+        while self.is_rate_limited and self.is_running:
+            time.sleep(0.5)
 
     def run(self):
         try:
@@ -76,8 +99,6 @@ class CoomerfansThread(QThread):
 
                     self.log(f"Found {len(post_urls)} posts on page {page}. Queuing downloads...")
 
-                    # Collect all download tasks from every post on this page first,
-                    # then dispatch them all to the thread pool in one batch.
                     all_tasks = []
                     for post_url in post_urls:
                         if not self.check_pause_and_cancel():
@@ -95,15 +116,8 @@ class CoomerfansThread(QThread):
         except Exception as e:
             self.log(f"Coomerfans Engine Error: {str(e)}")
 
-    # ------------------------------------------------------------------
-    # Task collection  (runs on the main QThread — no downloads here)
-    # ------------------------------------------------------------------
 
     def _collect_post_tasks(self, post_url, folder):
-        """
-        Returns a list of (media_url, save_path) tuples for one post.
-        Applies the image/video filter from the UI radio buttons.
-        """
         media_urls = self.client.get_media_from_post(post_url)
 
         skip_images = hasattr(self.main_app, 'radio_videos') and self.main_app.radio_videos.isChecked()
@@ -129,12 +143,8 @@ class CoomerfansThread(QThread):
 
         return tasks
 
-    # ------------------------------------------------------------------
-    # Parallel dispatcher
-    # ------------------------------------------------------------------
 
     def _run_parallel_downloads(self, tasks):
-        """Submit all tasks to a 4-worker pool and wait for them to finish."""
         if not tasks:
             return
 
@@ -146,7 +156,6 @@ class CoomerfansThread(QThread):
 
             for future in as_completed(futures):
                 if not self.is_running:
-                    # Cancel remaining futures (best-effort — running ones finish naturally)
                     for f in futures:
                         f.cancel()
                     break
@@ -154,22 +163,39 @@ class CoomerfansThread(QThread):
                 if exc:
                     self.log(f"Worker error: {exc}")
 
-    # ------------------------------------------------------------------
-    # Per-file downloader  (called from worker threads)
-    # ------------------------------------------------------------------
 
     def download_file(self, url, save_path):
-        """Downloads a single file. Thread-safe — called from the pool."""
         if not self.is_running:
             return
-        try:
-            file_name = os.path.basename(save_path)
-            response = self.client.session.get(url, headers=self.client.headers, stream=True, timeout=30)
-            response.raise_for_status()
+            
+        while self.is_rate_limited and self.is_running: time.sleep(0.5)
+            
+        file_name = os.path.basename(save_path)
+        
+        response = None
+        for attempt in range(4):
+            try:
+                res = self.client.session.get(url, headers=self.client.headers, stream=True, timeout=30)
+                if res.status_code in [429, 403]:
+                    self._handle_global_rate_limit(file_name)
+                    continue
+                res.raise_for_status()
+                response = res
+                break
+            except Exception as e:
+                if "429" in str(e) or "403" in str(e):
+                    self._handle_global_rate_limit(file_name)
+                    continue
+                self.log(f"Failed to connect to {file_name}: {e}")
+                return
 
+        if not response or response.status_code != 200:
+            return
+
+        try:
             total_size = int(response.headers.get('content-length', 0))
             downloaded = 0
-            file_type = "Video:" if url.endswith('.mp4') else "Image:"
+            file_type = "Video:" if url.endswith('.mp4') or url.endswith('.webm') else "Image:"
 
             with open(save_path, 'wb') as f:
                 for chunk in response.iter_content(chunk_size=8192):
@@ -186,6 +212,8 @@ class CoomerfansThread(QThread):
                                 file_type,
                                 f"{file_name}: {percent}% ({mb_dl:.1f}MB / {mb_tot:.1f}MB)"
                             )
+                            
+            time.sleep(0.1)
 
             if self.is_running:
                 self.overall_progress_signal.emit(1, 1)

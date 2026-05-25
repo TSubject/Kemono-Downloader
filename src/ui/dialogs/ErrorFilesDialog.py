@@ -236,7 +236,6 @@ class ErrorFilesDialog(QDialog):
         self.select_all_button.setEnabled(has_errors)
 
     def _handle_retry_selected(self):
-        # 1. NEW: Prevent concurrent overlapping retries
         if hasattr(self.parent_app, '_is_download_active') and self.parent_app._is_download_active():
             QMessageBox.warning(
                 self,
@@ -255,7 +254,6 @@ class ErrorFilesDialog(QDialog):
                 service = error_info.get('service')
                 user_id = error_info.get('user_id')
                 
-                # Your existing path safety and creator name logic
                 if service and user_id and hasattr(self.parent_app, 'creator_name_cache'):
                     creator_name = self.parent_app.creator_name_cache.get((service.lower(), str(user_id)), str(user_id))
                     
@@ -268,7 +266,6 @@ class ErrorFilesDialog(QDialog):
                 selected_files_for_retry.append(error_info)
 
         if selected_files_for_retry:
-            # 2. NEW: Disable buttons to prevent double-clicking before the dialog closes
             self.retry_button.setEnabled(False)
             self.select_all_button.setEnabled(False)
 

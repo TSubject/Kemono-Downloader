@@ -52,7 +52,6 @@ def fetch_single_simpcity_page(url, logger_func, cookies=None, post_id=None, che
 
         jobs_on_page = []
 
-        # 1. Check Images (Ignore saint2/turbo video thumbnails masquerading as images)
         image_tags = search_scope.find_all('img', class_='bbImage')
         for img_tag in image_tags:
             thumbnail_url = img_tag.get('src')
@@ -61,7 +60,6 @@ def fetch_single_simpcity_page(url, logger_func, cookies=None, post_id=None, che
             filename = img_tag.get('alt', '').replace('.md.', '.') or os.path.basename(unquote(urlparse(full_url).path))
             jobs_on_page.append({'type': 'image', 'filename': filename, 'url': full_url})
             
-        # 2. Check Standard Links
         link_tags = search_scope.find_all('a', href=True)
         for link in link_tags:
             href = link.get('href', '')
@@ -82,7 +80,6 @@ def fetch_single_simpcity_page(url, logger_func, cookies=None, post_id=None, che
             elif re.search(r'mega\.(nz|io)', actual_url): jobs_on_page.append({'type': 'mega', 'url': actual_url})
             elif re.search(r'gofile\.io', actual_url): jobs_on_page.append({'type': 'gofile', 'url': actual_url})
 
-        # 3. Check direct embedded video tags
         video_tags = search_scope.find_all('video')
         for video in video_tags:
             source_tag = video.find('source')
@@ -91,7 +88,6 @@ def fetch_single_simpcity_page(url, logger_func, cookies=None, post_id=None, che
                 if re.search(r'(saint2\.(su|pk|cr|to)|turbo\.cr)', src_url):
                     jobs_on_page.append({'type': 'saint2_direct', 'url': src_url})
         
-        # 4. Check Iframes
         iframe_tags = search_scope.find_all('iframe')
         for iframe in iframe_tags:
             src_url = iframe.get('src')

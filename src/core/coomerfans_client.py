@@ -21,10 +21,8 @@ class CoomerfansClient:
             soup = BeautifulSoup(response.text, 'html.parser')
             post_links = []
             
-            # Find all the post containers
             posts = soup.find_all('div', class_='post')
             for post in posts:
-                # Find the 'View Post' button
                 a_tag = post.find('a', class_='view-post')
                 if a_tag and 'href' in a_tag.attrs:
                     full_link = urljoin(self.base_url, a_tag['href'])
@@ -44,7 +42,6 @@ class CoomerfansClient:
                 
             soup = BeautifulSoup(response.text, 'html.parser')
             
-            # 1. Extract Images (<div class="post-body"> -> <img>)
             post_body = soup.find('div', class_='post-body')
             if post_body:
                 images = post_body.find_all('img')
@@ -52,7 +49,6 @@ class CoomerfansClient:
                     if 'src' in img.attrs:
                         media_urls.append(img['src'])
                         
-            # 2. Extract Videos (<div class="player"> -> <source>)
             players = soup.find_all('div', class_='player')
             for player in players:
                 source = player.find('source')

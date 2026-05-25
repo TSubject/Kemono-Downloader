@@ -40,9 +40,6 @@ class BooruDownloadThread(QThread):
         self.db = DatabaseManager()
         self.tag_count_cache = {}
         
-        # ==========================================
-        # LOAD IDENTICAL SETTINGS AS RULE34 DIALOG
-        # ==========================================
         settings = self.main_app.settings
         
         custom_bl = str(settings.value("r34_custom_blacklist", ""))
@@ -79,7 +76,6 @@ class BooruDownloadThread(QThread):
         scene_tags_str = settings.value("r34_scene_tags", "1girl,bikini,beach")
         self.ordered_scene_tags = [t.strip().lower() for t in scene_tags_str.split(',') if t.strip()]
 
-        # LOAD ALIAS DICTIONARY
         alias_str = settings.value("r34_tag_aliases", "1girl = solo, single, women")
         self.alias_map = {}
         for line in alias_str.split('||'):
@@ -89,7 +85,6 @@ class BooruDownloadThread(QThread):
                 for a in aliases.split(','):
                     self.alias_map[a.strip().lower()] = master
 
-        # LOAD CHARACTER DB
         self.smart_sort = settings.value("r34_smart_sort", False, type=bool)
         self.known_characters_exact = set()
         self.known_characters_base = {} 
@@ -110,7 +105,6 @@ class BooruDownloadThread(QThread):
                 except Exception as e:
                     pass
 
-        # HASH DB
         self.hash_db_path = os.path.join(self.main_app.user_data_path, "downloaded_hashes.json")
         self.hash_db = {}
         self.all_known_hashes = set()
@@ -176,7 +170,6 @@ class BooruDownloadThread(QThread):
     def get_tag_count(self, tag_name):
         original_tag = tag_name.lower().strip().replace(' ', '_').replace(':', '')
         if original_tag in self.tag_count_cache: return self.tag_count_cache[original_tag]
-        # For sorting weights, R34 API gives a perfectly fine relative count for Gelbooru tags
         try:
             r = requests.get(f"https://api.rule34.xxx/index.php?page=dapi&s=tag&q=index&name={original_tag}", timeout=5)
             if r.status_code == 200:
@@ -215,7 +208,6 @@ class BooruDownloadThread(QThread):
             for item in item_generator:
                 if self.is_cancelled: break
                 
-                # Check for max downloads constraint
                 if self.max_downloads > 0 and download_count >= self.max_downloads:
                     self.progress_signal.emit(f"🛑 Maximum download limit ({self.max_downloads}) reached. Stopping.")
                     break
@@ -229,7 +221,6 @@ class BooruDownloadThread(QThread):
                 post_data = item
                 processed_count += 1
 
-                # 1. APPLY FILTERS (Min Score, Ratings)
                 if int(post_data.get('score', 0)) < self.min_score:
                     skip_count += 1
                     continue
@@ -240,7 +231,6 @@ class BooruDownloadThread(QThread):
                 elif self.rating_filter == 2 and rating_char == 'e': continue 
                 elif self.rating_filter == 3 and rating_char != 'e': continue 
 
-                # 2. TAG CLEANING & BLACKLISTS
                 raw_tags_list = post_data.get('tags', '').lower().split()
                 translated_tags_list = [self.alias_map.get(t, t) for t in raw_tags_list]
                 post_tags_list = [t.replace('_(series)', '') for t in translated_tags_list]
@@ -254,14 +244,12 @@ class BooruDownloadThread(QThread):
                 file_url = post_data.get('file_url')
                 if not file_url: continue
 
-                # Media Type filtering
                 ext = post_data.get('extension', 'jpg').lower()
                 if not ext.startswith('.'): ext = '.' + ext
                 is_video = ext in ['.mp4', '.webm', '.mov', '.mkv']
                 if is_video and not self.dl_videos: continue 
                 if not is_video and not self.dl_images: continue 
 
-                # 3. HASH DUPLICATE CHECK
                 file_hash = post_data.get('md5', post_data.get('hash', ''))
                 post_id = post_data.get('id', 'Unknown')
                 search_category = post_data.get('search_tags', 'booru_download')
@@ -272,7 +260,6 @@ class BooruDownloadThread(QThread):
                     skip_count += 1
                     continue
 
-                # 4. SMART FOLDER ROUTING
                 char_folders = [] 
                 scene_folder_name = ""
 
@@ -346,7 +333,6 @@ class BooruDownloadThread(QThread):
                     skip_count += 1
                     continue
 
-                # 5. DOWNLOAD & DB INJECTION
                 if self.pause_event.is_set():
                     while self.pause_event.is_set() and not self.is_cancelled: time.sleep(0.5)
 
@@ -362,7 +348,6 @@ class BooruDownloadThread(QThread):
                         
                         if not self.is_cancelled:
                             download_count += 1
-                            # 🔥 WRITE TO DB EXACTLY LIKE RULE34 🔥
                             calc_phash, _ = self.calculate_phash_safe(filepath)
                             
                             if file_hash:

@@ -13,7 +13,7 @@ class DeviantArtClient:
     def __init__(self, logger_func=print, check_pause_func=None, proxies=None):
         self.session = requests.Session()
         self.logger = logger_func
-        self.check_pause_func = check_pause_func  # 🔹 Let the client hear the cancel button!
+        self.check_pause_func = check_pause_func
         
         if proxies:
             self.session.proxies.update(proxies)
@@ -38,7 +38,6 @@ class DeviantArtClient:
         self.logged_waits = set()
         self.log_lock = threading.Lock()
 
-    # 🔹 ADD SMART SLEEP
     def _smart_sleep(self, seconds):
         if not self.check_pause_func:
             time.sleep(seconds)
@@ -85,7 +84,6 @@ class DeviantArtClient:
         req_timeout = 30 if self.proxies_enabled else 20
 
         while True:
-            # 🔹 Abort instantly if cancelled!
             if self.check_pause_func and self.check_pause_func():
                 return {}
 
@@ -100,7 +98,6 @@ class DeviantArtClient:
                         sleep_time = 15 
                     
                     self._log_once(sleep_time, f"   [DeviantArt] ⚠️ Rate limit (429). Sleeping {sleep_time}s...")
-                    # 🔹 Smart sleep handles the wait while listening for Cancel
                     if self._smart_sleep(sleep_time):
                         return {}
                     continue
@@ -134,7 +131,6 @@ class DeviantArtClient:
             except requests.exceptions.RequestException as e:
                 if retries < max_retries:
                     self._log_once("conn_error", f"   [DeviantArt] Connection error: {e}. Retrying...")
-                    # 🔹 Replace time.sleep() with smart sleep!
                     if self._smart_sleep(backoff_delay):
                         return {}
                     retries += 1

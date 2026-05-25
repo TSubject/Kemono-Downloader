@@ -33,7 +33,6 @@ def get_chapter_list(scraper, series_url, logger_func, check_pause_func=None, pr
                 wait_time = (2 ** attempt) + random.uniform(0, 2)
                 logger_func(f"      Retrying in {wait_time:.1f} seconds...")
                 
-                # 🔹 SMART SLEEP: Listen for cancel/pause during the wait
                 if check_pause_func:
                     for _ in range(int(wait_time * 10)):
                         if check_pause_func(): return []
@@ -93,7 +92,6 @@ def fetch_chapter_data(scraper, chapter_url, logger_func, check_pause_func=None,
                 wait_time = (2 ** attempt) + random.uniform(0, 2)
                 logger_func(f"      Retrying in {wait_time:.1f} seconds...")
                 
-                # 🔹 SMART SLEEP: Listen for cancel/pause during the wait
                 if check_pause_func:
                     for _ in range(int(wait_time * 10)):
                         if check_pause_func(): return None, None, None

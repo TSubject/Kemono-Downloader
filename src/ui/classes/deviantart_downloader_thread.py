@@ -6,11 +6,9 @@ import random
 from datetime import datetime
 from PyQt5.QtCore import QThread, pyqtSignal
 
-# --- NEW IMPORTS ---
 from PIL import Image
 import imagehash
 from ...core.database_manager import DatabaseManager
-# -------------------
 
 from ...core.deviantart_client import DeviantArtClient
 from ...utils.file_utils import clean_folder_name
@@ -33,16 +31,13 @@ class DeviantArtDownloadThread(QThread):
         self.download_count = 0
         self.skip_count = 0
         
-        # Initialize DB
         self.db = DatabaseManager()
 
     def _check_pause_cancel(self):
-        # 1. Check if the global Cancel button was pressed
         if getattr(self, 'is_cancelled', False) or (self.cancellation_event and self.cancellation_event.is_set()):
             self.is_cancelled = True
             return True
             
-        # 2. Check if the global Pause button was pressed
         if self.pause_event and self.pause_event.is_set():
             self.progress_signal.emit("   Download paused...")
             
@@ -64,7 +59,6 @@ class DeviantArtDownloadThread(QThread):
 
     def run(self):
         self.is_cancelled = False
-        # 🔹 Pass the pause checker into the client!
         self.client = DeviantArtClient(
             logger_func=self.progress_signal.emit, 
             check_pause_func=self._check_pause_cancel, 
@@ -242,7 +236,6 @@ class DeviantArtDownloadThread(QThread):
                         if chunk:
                             f.write(chunk)
             
-            # --- NEW TAGLESS DB SAVE ---
             calculated_phash = None
             valid_exts = {'.jpg', '.jpeg', '.png', '.bmp', '.webp'}
             if ext.lower() in valid_exts:
@@ -256,7 +249,6 @@ class DeviantArtDownloadThread(QThread):
                 file_hash=None,
                 phash=calculated_phash
             )
-            # ---------------------------
 
             self.download_count += 1
             

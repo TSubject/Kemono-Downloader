@@ -7,13 +7,13 @@ import unicodedata
 from collections import defaultdict
 from urllib.parse import urlparse
 
-import requests # <-- ADDED THIS
+import requests
 
 from PyQt5.QtCore import pyqtSignal, QCoreApplication, QSize, QThread, QTimer, Qt
 from PyQt5.QtWidgets import (
     QApplication, QDialog, QHBoxLayout, QLabel, QLineEdit, QListWidget,
     QListWidgetItem, QMessageBox, QPushButton, QVBoxLayout, QAbstractItemView,
-    QSplitter, QProgressBar, QWidget, QFileDialog, QStackedWidget  # <-- ADDED QStackedWidget
+    QSplitter, QProgressBar, QWidget, QFileDialog, QStackedWidget
 )
 
 from ...i18n.translator import get_translation
@@ -23,7 +23,6 @@ from ...utils.network_utils import extract_post_info, prepare_cookies_for_reques
 from ...utils.resolution import get_dark_theme
 from .UpdateCheckDialog import UpdateCheckDialog
 
-# --- NEW: BACKGROUND DOWNLOAD THREAD ---
 class CreatorDownloadThread(QThread):
     progress_signal = pyqtSignal(int)
     status_signal = pyqtSignal(str)
@@ -36,7 +35,6 @@ class CreatorDownloadThread(QThread):
 
     def run(self):
         try:
-            # Ensure the 'data' folder exists in the app directory!
             os.makedirs(os.path.dirname(self.save_path), exist_ok=True)
             
             response = requests.get(self.url, stream=True, timeout=15)
@@ -70,7 +68,6 @@ class CreatorDownloadThread(QThread):
                 
         except Exception as e:
             self.finished_signal.emit(False, str(e))
-# ---------------------------------------
 
 class PostsFetcherThread (QThread ):
     status_update =pyqtSignal (str )
@@ -195,13 +192,11 @@ class EmptyPopupDialog (QDialog ):
         self.current_scope_mode = self.SCOPE_CREATORS
         self.user_data_path = user_data_path
 
-        # --- THE PATH FIX: Lock the path using the main app's root directory ---
         if hasattr(self.parent_app, 'app_base_dir') and self.parent_app.app_base_dir:
             project_root = self.parent_app.app_base_dir
         else:
             project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../"))
         self.creators_file_path = os.path.join(project_root, "data", "creators.json")
-        # -----------------------------------------------------------------------
 
         app_icon =get_app_icon_object ()
         if app_icon and not app_icon .isNull ():
@@ -222,14 +217,12 @@ class EmptyPopupDialog (QDialog ):
         self ._is_scrolling_titles =False 
         self ._is_scrolling_dates =False 
 
-        # --- UI LAYOUT FIX: Setup the Stacked Widget ---
-        dialog_layout = QVBoxLayout(self) # Changed to QVBoxLayout
+        dialog_layout = QVBoxLayout(self)
         self.setLayout(dialog_layout)
 
         self.stacked_widget = QStackedWidget()
         dialog_layout.addWidget(self.stacked_widget)
 
-        # === PAGE 1: Download Screen ===
         self.download_page = QWidget()
         dl_layout = QVBoxLayout(self.download_page)
         
@@ -252,11 +245,9 @@ class EmptyPopupDialog (QDialog ):
         dl_layout.addStretch()
         self.stacked_widget.addWidget(self.download_page)
 
-        # === PAGE 2: Normal Creator UI ===
         self.normal_page = QWidget()
         normal_layout = QVBoxLayout(self.normal_page)
         normal_layout.setContentsMargins(0, 0, 0, 0)
-        # -----------------------------------------------
 
         self .left_pane_widget =QWidget ()
         left_pane_layout =QVBoxLayout (self .left_pane_widget )
@@ -367,10 +358,8 @@ class EmptyPopupDialog (QDialog ):
         self .posts_title_list_widget .verticalScrollBar ().valueChanged .connect (self ._sync_scroll_dates )
         self .posts_date_list_widget .verticalScrollBar ().valueChanged .connect (self ._sync_scroll_titles )
         
-        # --- THIS WAS CHANGED: Add splitter to normal_layout ---
         normal_layout.addWidget(self.main_splitter)
         self.stacked_widget.addWidget(self.normal_page)
-        # -------------------------------------------------------
 
         self .original_size =self .sizeHint ()
         self .main_splitter .setSizes ([int (self .width ()*scale_factor ),0 ])
@@ -509,7 +498,7 @@ class EmptyPopupDialog (QDialog ):
         
         self.dl_button.setEnabled(False)
         self.dl_progress.show()
-        self.dl_progress.setRange(0, 0) # Indeterminate bounce mode
+        self.dl_progress.setRange(0, 0)
         self.dl_info_label.setText("Connecting to GitHub... Please wait.")
         
         self.dl_thread = CreatorDownloadThread(github_raw_url, self.creators_file_path)

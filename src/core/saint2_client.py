@@ -109,7 +109,6 @@ class SaintMediaExtractor(BaseExtractor):
         """Generator that yields the single file from a media page."""
         path, embed, media_id = self.groups
         
-        # 1. Fetch the initial embed page to establish session cookies
         embed_url = f"https://turbo.cr/embed/{media_id}"
         response = self.request(embed_url)
         
@@ -120,12 +119,10 @@ class SaintMediaExtractor(BaseExtractor):
 
         file_url = ""
 
-        # 2. Mimic the browser's background API call to get the signed URL
         self.log(f"      🔄 Requesting signed video URL from API for ID: {media_id}")
         api_url = f"https://turbo.cr/api/sign?v={media_id}"
         
         try:
-            # Pass the embed_url as the Referer to make it look like a legitimate browser request
             api_resp = self.session.get(api_url, headers={
                 "Accept": "application/json",
                 "Referer": embed_url
@@ -139,7 +136,6 @@ class SaintMediaExtractor(BaseExtractor):
         except Exception as e:
             self.log(f"      ⚠️ API sign request failed: {e}")
 
-        # 3. Fallback: If the API fails, fall back to aggressive regex on the HTML
         if not file_url and response:
             clean_html = response.text.replace('\\/', '/').replace('\\"', '"')
             turbocdn_direct = re_module.search(r'(https?://[^"\'<>\s]*\.turbocdn\.[^"\'<>\s]+)', clean_html)
@@ -150,20 +146,17 @@ class SaintMediaExtractor(BaseExtractor):
             self.log(f"      ❌ Could not resolve true video URL for {media_id}. The video may be deleted.")
             return title, []
 
-        # Clean up any HTML entities in the URL
         file_url = html.unescape(file_url).replace("&amp;", "&")
 
         filename_info = nameext_from_url(file_url)
         ext = filename_info['extension'] or 'mp4'
         name = filename_info['filename'] or media_id
         
-        # Clean up query params from name/ext just in case
         name = name.split('?')[0]
         ext = ext.split('?')[0]
 
         filename = f"{name}.{ext}"
 
-        # 4. Bundle data for the background thread
         file_data = {
             "url": file_url,
             "filename": filename,

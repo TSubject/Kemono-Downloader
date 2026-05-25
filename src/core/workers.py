@@ -222,7 +222,6 @@ class PostProcessorWorker:
         self.visual_sort_active = visual_sort_active 
         self.user_data_path = user_data_path
         
-        # 🔹 KEMONO ONLY: Only initialize the database if downloading from Kemono!
         if 'kemono' in self.api_url_input.lower():
             self.db = DatabaseManager()
         else:
@@ -682,9 +681,6 @@ class PostProcessorWorker:
                 self._emit_signal('file_download_status', True)
                 current_url_to_try = file_url
                 response = requests.get(current_url_to_try, headers=file_download_headers, timeout=(30, 300), stream=True, cookies=cookies_to_use_for_file, proxies=self.proxies, verify=False)
-                # Kemono servers aggressively rate-limit and return 403 Forbidden errors.
-                # If we get a 403, we automatically swap to a backup server node (e.g., n1.kemono.su, n2.kemono.su)
-                # to bypass the block and keep the download moving.
                 if response.status_code == 403 and ('kemono.' in current_url_to_try or 'coomer.' in current_url_to_try):
                     self.logger(f"   ⚠️ Got 403 Forbidden for '{api_original_filename}'. Attempting subdomain rotation...")
                     new_url = self._find_valid_subdomain(current_url_to_try)
@@ -712,9 +708,6 @@ class PostProcessorWorker:
                     if is_video(api_original_filename) or is_archive(api_original_filename): file_is_eligible_by_scope = True
 
                 min_size_in_bytes = self.multipart_min_size_mb * 1024 * 1024
-                # Determine if the file is large enough to split into chunks for faster downloading.
-                # We only trigger this if the server supports 'Accept-Ranges' (meaning it allows partial file requests)
-                # and the file size exceeds our user-defined minimum MB limit.
                 attempt_multipart = (self.allow_multipart_download and MULTIPART_DOWNLOADER_AVAILABLE and
                                      file_is_eligible_by_scope and
                                      num_parts_for_file > 1 and total_size_bytes > min_size_in_bytes and 
@@ -1006,9 +999,6 @@ class PostProcessorWorker:
                 final_filename_saved_for_return = final_filename_on_disk
                 self.logger(f"✅ Saved: '{final_filename_saved_for_return}' (from '{api_original_filename}', {downloaded_size_bytes / (1024 * 1024):.2f} MB) in '{os.path.basename(effective_save_folder)}'")
 
-                # ==========================================
-                # NEW: SAVE TO TAGLESS DATABASE (KEMONO ONLY)
-                # ==========================================
                 if getattr(self, 'db', None):
                     actual_final_path = os.path.join(effective_save_folder, final_filename_saved_for_return)
                     calculated_phash = None
@@ -1020,15 +1010,12 @@ class PostProcessorWorker:
                         except Exception:
                             pass
                     
-                    # We use the 'calculated_file_hash' that your worker already generated
-                    # earlier in the download stream to save CPU power!
                     self.db.record_tagless_download(
                         file_path=actual_final_path,
                         file_name=final_filename_saved_for_return,
                         file_hash=calculated_file_hash, 
                         phash=calculated_phash
                     )
-                # ==========================================
 
                 downloaded_file_details = {
                     'disk_filename': final_filename_saved_for_return,
@@ -2220,9 +2207,6 @@ class PostProcessorWorker:
                                 base_folder_for_this_file = title_folders[0]
                                 known_name_match_found_for_this_file = True
                             else:
-                                # Check if the text parser found multiple UNIQUE character names (e.g., "Frieren" and "Fern").
-                                # If it found 2+ unique names, but the post only has 1 image, it's a Group Photo!
-                                # We bypass the AI and assign the image to the first character's folder to save processing power.
                                 if title_unique_count > 1 and num_potential_files_in_post < len(title_folders):
                                     base_folder_for_this_file = title_folders[0]
                                     known_name_match_found_for_this_file = True

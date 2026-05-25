@@ -12,11 +12,9 @@ import requests
 from curl_cffi import requests as cffi_requests
 from PyQt5.QtCore import QThread, pyqtSignal
 
-# --- NEW IMPORTS ---
 from PIL import Image
 import imagehash
 from ...core.database_manager import DatabaseManager
-# -------------------
 
 from ...core.bunkr_client import fetch_bunkr_data
 from ...core.pixeldrain_client import fetch_pixeldrain_data
@@ -52,10 +50,8 @@ class SimpCityDownloadThread(QThread):
         self.total_jobs_processed = 0
         self.processed_job_urls = set()
         
-        # Initialize DB
         self.db = DatabaseManager()
 
-    # 🔹 NEW: Pause & Cancel Checkers
     def _check_pause_cancel(self):
         if self.is_cancelled or (self.parent_app and self.parent_app.cancellation_event.is_set()):
             self.is_cancelled = True
@@ -124,7 +120,7 @@ class SimpCityDownloadThread(QThread):
         saint2_logger = self._ServiceLoggerAdapter(self.progress_signal.emit, prefix="      ")
         
         for job in jobs_to_check:
-            if self._check_pause_cancel(): break # 🔹 Stop enriching if cancelled
+            if self._check_pause_cancel(): break
             job_type = job.get('type')
             job_url = job.get('url')
 
@@ -179,7 +175,7 @@ class SimpCityDownloadThread(QThread):
             response.raise_for_status()
             with open(filepath, 'wb') as f:
                 for chunk in response.iter_content(chunk_size=8192):
-                    if self._check_pause_cancel(): # 🔹 Abort chunk write
+                    if self._check_pause_cancel():
                         f.close()
                         os.remove(filepath)
                         return
@@ -198,7 +194,7 @@ class SimpCityDownloadThread(QThread):
     def _image_worker(self, album_path):
         session = cloudscraper.create_scraper()
         while True:
-            if self._check_pause_cancel(): break # 🔹 Abort thread loop
+            if self._check_pause_cancel(): break
             try:
                 job = self.image_queue.get(timeout=1)
                 if job is None: break
@@ -209,7 +205,7 @@ class SimpCityDownloadThread(QThread):
 
     def _service_worker(self, album_path):
         while True:
-            if self._check_pause_cancel(): break # 🔹 Abort thread loop
+            if self._check_pause_cancel(): break
             try:
                 job = self.service_queue.get(timeout=1)
                 if job is None: break
@@ -247,7 +243,6 @@ class SimpCityDownloadThread(QThread):
     def _download_album(self, files_to_process, source_url, album_path):
         if not files_to_process: return
         
-        # 🔹 UPGRADED: Use curl_cffi instead of cloudscraper to bypass CDN Cloudflare!
         session = cffi_requests.Session(impersonate="chrome120")
         
         for file_data in files_to_process:
@@ -261,14 +256,11 @@ class SimpCityDownloadThread(QThread):
                 else:
                     self.progress_signal.emit(f"       -> Downloading: '{filename}'...")
                     
-                    # Grab the cookies and headers that the prefetcher bypassed Cloudflare with
                     headers = file_data.get('headers', {'Referer': source_url})
                     req_cookies = file_data.get('cookies', {})
                     
-                    # 🔹 Pass everything into the cffi session!
                     response = session.get(file_data.get('url'), stream=True, timeout=180, headers=headers, cookies=req_cookies)
                     
-                    # 🔹 SAFETY NET: Abort if Cloudflare gives us an HTML page instead of a video
                     content_type = response.headers.get('Content-Type', '')
                     if 'text/html' in content_type:
                         self.progress_signal.emit(f"       ❌ Blocked by CDN! Downloaded a 42KB HTML page instead of the video.")
@@ -313,7 +305,6 @@ class SimpCityDownloadThread(QThread):
         try:
             if is_single_post_mode:
                 self.progress_signal.emit("   Mode: Single Post detected.")
-                # 🔹 Pass check_pause_func down to the client
                 album_title, _, _ = fetch_single_simpcity_page(self.start_url, self._log_interceptor, cookies=self.cookies, post_id=self.post_id, check_pause_func=self._check_pause_cancel)
                 album_path = os.path.join(self.output_dir, clean_folder_name(album_title or "simpcity_post"))
             else:
@@ -356,7 +347,7 @@ class SimpCityDownloadThread(QThread):
                 base_url = re.sub(r'(/page-\d+)|(/post-\d+)', '', self.start_url).split('#')[0].strip('/')
                 page_counter = 1; end_of_thread = False; MAX_RETRIES = 3
                 while not end_of_thread:
-                    if self._check_pause_cancel(): break # 🔹 Abort main crawl loop
+                    if self._check_pause_cancel(): break
                     page_url = f"{base_url}/page-{page_counter}"; retries = 0; page_fetch_successful = False
                     while retries < MAX_RETRIES:
                         if self._check_pause_cancel(): end_of_thread = True; break
@@ -420,7 +411,6 @@ class SimpCityDownloadThread(QThread):
                                 end_of_thread = True; break
                             elif e.response.status_code == 429: 
                                 self.progress_signal.emit(f"   -> Rate limited (429). Waiting...")
-                                # 🔹 Use Smart Sleep so user can cancel during a rate limit!
                                 if self._smart_sleep(5 * (retries + 2)):
                                     end_of_thread = True
                                     break
@@ -439,7 +429,6 @@ class SimpCityDownloadThread(QThread):
 
         self.progress_signal.emit("\n--- All pages analyzed. Waiting for background downloads to complete... ---")
         
-        # 🔹 Unblock the queue workers by feeding them None
         for _ in range(num_image_threads): self.image_queue.put(None)
         for _ in range(num_service_threads): self.service_queue.put(None)
         

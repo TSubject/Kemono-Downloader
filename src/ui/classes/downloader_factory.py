@@ -189,7 +189,6 @@ def create_downloader_thread(main_app, api_url, service, id1, id2, effective_out
             parent=main_app
         )    
     
-    # 🔹 NEW HOTLEAKS ROUTING 🔹
     if service == 'hotleaks' or 'hotleaks.tv' in api_url or 'hotleaks.vip' in api_url:
         main_app.log_signal.emit("🔥 Hotleaks URL detected. Starting dedicated downloader.")
         return HotleaksThread(

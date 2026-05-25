@@ -75,7 +75,7 @@ def add_metadata_page(pdf, post, font_family):
             pdf.set_font(font_family, 'U', 11) 
             
             pdf.write(8, str(value), link_url)
-            pdf.ln(8) # Manually add the line break that multi_cell used to handle
+            pdf.ln(8)
             
             pdf.set_text_color(0, 0, 0)
             pdf.set_font(font_family, '', 11)

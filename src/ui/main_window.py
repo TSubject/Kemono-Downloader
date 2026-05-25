@@ -164,22 +164,18 @@ class DownloaderApp (QWidget ):
         """
         super().__init__()
         
-        # 1. Determine the EXACT permanent directory of the .exe or script
         if getattr(sys, 'frozen', False):
             self.app_base_dir = os.path.dirname(sys.executable)
         else:
             self.app_base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
             
-        # 2. Define and create the portable 'appdata' folder right next to the .exe
         user_data_path = os.path.join(self.app_base_dir, "appdata")
         os.makedirs(user_data_path, exist_ok=True)
         self.user_data_path = user_data_path
         
-        # 3. Force QSettings to use a local INI file instead of the Windows Registry
         ini_path = os.path.join(user_data_path, "config.ini")
         self.settings = QSettings(ini_path, QSettings.IniFormat)
         
-        # 4. Initialize standard variables
         self.active_update_profile = None
         self.new_posts_for_update = []
         self.active_update_profiles_list = []
@@ -189,7 +185,6 @@ class DownloaderApp (QWidget ):
         self.finish_lock = threading.Lock() 
         self.add_info_in_pdf_setting = False
 
-        # 5. Load resolution safely from the new INI file
         saved_res = self.settings.value(RESOLUTION_KEY, "Auto")
         if saved_res != "Auto":
             try:
@@ -197,7 +192,7 @@ class DownloaderApp (QWidget ):
                 self.resize(width, height)
                 self._center_on_screen() 
             except ValueError:
-                pass # Will just use default size
+                pass
 
         self.jobs_dir = os.path.join(self.user_data_path, "jobs")
         os.makedirs(self.jobs_dir, exist_ok=True)
@@ -333,19 +328,15 @@ class DownloaderApp (QWidget ):
         self.last_logged_filter_mode = None
         self.last_logged_external_link_status = None
         self.allcomic_warning_shown = False 
-        # ==========================================
-        # 🔹 DYNAMIC UI PROFILES
-        # ==========================================
         self.UI_PROFILES = {
-            'kemono': {  # Master profile (Default)
+            'kemono': {
                 'enabled_radios': ['radio_all', 'radio_videos', 'radio_only_archives', 'radio_only_audio', 'radio_only_links', 'radio_more', 'radio_images'],
-                # IMPORTANT: Change these 4 strings if your checkbox variables are named differently!
                 'enabled_checkboxes': ['favorite_mode_checkbox', 'download_thumbnails_checkbox', 'scan_content_images_checkbox', 'keep_duplicates_checkbox'],
                 'advanced_enabled': True,
                 'filters_enabled': True,
                 'force_radio': None
             },
-            'image_only': {  # For AllComic, Pixiv, Instagram
+            'image_only': {
                 'enabled_radios': ['radio_images'], 
                 'enabled_checkboxes': [], 
                 'advanced_enabled': False,
@@ -353,12 +344,11 @@ class DownloaderApp (QWidget ):
                 'force_radio': 'radio_images'
             },
             'erome': {
-                # Allow 'All', 'Images', and 'Videos' so they can grab mixed albums!
                 'enabled_radios': ['radio_all', 'radio_videos', 'radio_images'], 
-                'enabled_checkboxes': [], # Disable all checkboxes
-                'advanced_enabled': False, # Completely lock the Advanced Settings panel
-                'filters_enabled': False, # Disable character and skip word inputs
-                'force_radio': 'radio_all' # Force it to 'All' by default to grab the whole album
+                'enabled_checkboxes': [],
+                'advanced_enabled': False,
+                'filters_enabled': False,
+                'force_radio': 'radio_all'
             },
             'deviantart': {
                 'enabled_radios': ['radio_all', 'radio_images', 'radio_only_archives'],
@@ -366,10 +356,9 @@ class DownloaderApp (QWidget ):
                 'advanced_enabled': True, 
                 'filters_enabled': False,
                 'force_radio': 'radio_all',
-                # 🔹 ADDED 'custom_rename_dialog_button' SO YOU CAN CLICK IT!
                 'allowed_advanced': ['manga_mode_checkbox', 'manga_rename_toggle_button', 'custom_rename_dialog_button']
             },
-            'file_host': {  # For Mega, GDrive, Dropbox, Gofile
+            'file_host': {
                 'enabled_radios': ['radio_all', 'radio_only_archives'],
                 'enabled_checkboxes': [],
                 'advanced_enabled': False,
@@ -1625,10 +1614,8 @@ class DownloaderApp (QWidget ):
         if hasattr(self, 'booru_creds_input'):
             raw_creds = self.booru_creds_input.text().strip()
             
-        # Parse the string (removes the leading '&' or '?' automatically)
         parsed = parse_qs(raw_creds.lstrip('?&'))
         
-        # Safely get the values, default to empty string if not found
         api_key = parsed.get('api_key', [''])[0]
         user_id = parsed.get('user_id', [''])[0]
         
@@ -1640,12 +1627,10 @@ class DownloaderApp (QWidget ):
         is_rule34 = "rule34.xxx" in url_text
         is_standard_booru = "gelbooru.com" in url_text or "danbooru.donmai.us" in url_text
         
-        # Show the unified text box and settings button for ANY Booru site
         if is_rule34 or is_standard_booru:
             self.booru_inputs_widget.setVisible(True)
-            self.rule34_settings_btn.setVisible(True) # Show for all Booru sites now!
+            self.rule34_settings_btn.setVisible(True)
             
-            # Dynamically change the button text based on the site
             if is_standard_booru:
                 self.rule34_settings_btn.setText("⚙️ Booru Settings")
             else:
@@ -1832,12 +1817,10 @@ class DownloaderApp (QWidget ):
 
         api_url = self.link_input.text().strip()
         
-        # --- THE FIX: Custom Discord URL Parser ---
         server_id = None
         channel_id = None
         
         if "/discord/server/" in api_url.lower():
-            # Example: https://kemono.cr/discord/server/553172672893419520/1274208191529353216
             parts = api_url.split("/discord/server/")[1].strip("/").split("/")
             if len(parts) >= 1:
                 server_id = parts[0]
@@ -1847,7 +1830,6 @@ class DownloaderApp (QWidget ):
         if not server_id:
             QMessageBox.critical(self, "Input Error", "Could not detect a valid Discord Server ID in the URL.\nPlease ensure it looks like: kemono.cr/discord/server/123/456")
             return
-        # ------------------------------------------
 
         default_filename = f"discord_{server_id}_{channel_id or 'server'}.pdf"
         filepath, _ = QFileDialog.getSaveFileName(self, "Save Discord Log as PDF", default_filename, "PDF Files (*.pdf)")
@@ -1895,7 +1877,6 @@ class DownloaderApp (QWidget ):
             self.finished_signal.emit(0, 0, False, [])
             return
 
-        # Fetch messages directly from Kemono API
         for i, channel in enumerate(channels_to_process):
             chan_name = channel.get('name', channel.get('id', 'unknown'))
             queue_progress_label_update(f"Fetching from channel {i+1}/{len(channels_to_process)}: #{chan_name}")
@@ -1906,7 +1887,7 @@ class DownloaderApp (QWidget ):
                     logger=queue_logger, 
                     cancellation_event=self.cancellation_event, 
                     pause_event=self.pause_event, 
-                    cookies_dict=None  # <-- THE FIX: Hardcoded to None
+                    cookies_dict=None
                 )
                 
                 for message_batch in message_generator:
@@ -2406,7 +2387,6 @@ class DownloaderApp (QWidget ):
         try:
             from .dialogs.Rule34SettingsDialog import Rule34SettingsDialog
             
-            # Open the dialog without passing the old initial_creds argument
             dialog = Rule34SettingsDialog(self)
             
             if dialog.exec_() == QDialog.Accepted:
@@ -3982,54 +3962,44 @@ class DownloaderApp (QWidget ):
             
         profile = self.UI_PROFILES.get(profile_name, self.UI_PROFILES['kemono'])
 
-        # Helper to safely find the widget whether it's in self.ui or just self
         def get_widget(name):
             if hasattr(self, 'ui') and hasattr(self.ui, name):
                 return getattr(self.ui, name)
             return getattr(self, name, None)
 
-        # 1. Update Radio Buttons
         all_radios = ['radio_all', 'radio_videos', 'radio_only_archives', 'radio_only_audio', 'radio_only_links', 'radio_more', 'radio_images']
         for r in all_radios:
             widget = get_widget(r)
             if widget:
                 widget.setEnabled(r in profile['enabled_radios'])
 
-        # Force a specific radio button to be checked (e.g. Images for AllComic)
         if profile['force_radio']:
             force_widget = get_widget(profile['force_radio'])
             if force_widget:
                 force_widget.setChecked(True)
 
-        # 2. Update Checkboxes
         all_checkboxes = ['favorite_mode_checkbox', 'download_thumbnails_checkbox', 'scan_content_images_checkbox', 'keep_duplicates_checkbox']
         for c in all_checkboxes:
             widget = get_widget(c)
             if widget:
                 widget.setEnabled(c in profile['enabled_checkboxes'])
 
-        # 3. Update Advanced Settings Panel 
         adv_widget = get_widget('advanced_settings_widget')
         if adv_widget:
             adv_widget.setEnabled(profile['advanced_enabled'])
             
-            # 🔹 NEW: Selectively disable checkboxes inside Advanced Settings
             if profile['advanced_enabled']:
                 from PyQt5.QtWidgets import QCheckBox
                 
-                # Check if this profile has a strict list of allowed advanced features
                 if 'allowed_advanced' in profile:
-                    # 1. Turn OFF every single checkbox inside the advanced panel
                     for chk in adv_widget.findChildren(QCheckBox):
                         chk.setEnabled(False)
                     
-                    # 2. Turn ON only the ones explicitly allowed in the profile
                     for allowed_name in profile['allowed_advanced']:
                         allowed_widget = get_widget(allowed_name)
                         if allowed_widget:
                             allowed_widget.setEnabled(True)
                 else:
-                    # Fallback (for Kemono): Make sure all checkboxes are turned back ON
                     for chk in adv_widget.findChildren(QCheckBox):
                         chk.setEnabled(True)
 
@@ -4075,13 +4045,9 @@ class DownloaderApp (QWidget ):
         if hasattr(self, 'simpcity_settings_widget'):
             self.simpcity_settings_widget.setVisible(is_simpcity)
         
-        # ==========================================
-        # 🔹 THE NEW UNIVERSAL UI ROUTER
-        # ==========================================
         if service == 'deviantart':
             self._apply_ui_profile('deviantart')
             
-            # DeviantArt specific renaming logic
             from ..config.constants import STYLE_CUSTOM
             
             if getattr(self, 'manga_filename_style', None) != STYLE_CUSTOM:
@@ -4109,24 +4075,21 @@ class DownloaderApp (QWidget ):
         elif service in ['allcomic', 'pixiv', 'instagram', 'nhentai', 'hentaifox', 'hentai2read', 'mangadex'] or any(domain in url_text.lower() for domain in ['allporncomic.com', 'nhentai.net', 'hentaifox.com', 'hentai2read.com', 'mangadex.org']):
             self._apply_ui_profile('image_only')
             
-            # Keep Manga Renaming available for these sites!
             if hasattr(self, 'manga_rename_toggle_button') and self.manga_rename_toggle_button:
                 self.manga_rename_toggle_button.setEnabled(True)
             
         elif service == 'erome' or 'erome.com' in url_text.lower() or is_coomerfans:
-            self._apply_ui_profile('erome') # Use the same profile since Coomerfans needs the exact same UI limits
+            self._apply_ui_profile('erome')
             if hasattr(self, 'manga_rename_toggle_button') and self.manga_rename_toggle_button:
                 self.manga_rename_toggle_button.setEnabled(True)
 
         elif is_hotleaks:
-            # 🔹 HOTLEAKS UI: Disable everything and lock Media to "All"
             self.filter_group_box.setVisible(False)
             self.text_extractor_group.setVisible(False)
             self.simpcity_options_group.setVisible(False)
             self.pdf_checkbox.setEnabled(False)
             self.zip_checkbox.setEnabled(False)
             
-            # Show the radio group but freeze it on "All"
             self.media_group_box.setVisible(True)
             self.media_radio_all.setChecked(True)
             self.media_radio_all.setEnabled(False)
@@ -4139,13 +4102,10 @@ class DownloaderApp (QWidget ):
                 self.manga_rename_toggle_button.setEnabled(True)
                 
         elif not is_specialized_for_disabling:
-            self._apply_ui_profile('kemono') # Default fallback restores Kemono UI
+            self._apply_ui_profile('kemono')
             if hasattr(self, 'manga_rename_toggle_button') and self.manga_rename_toggle_button:
                 self.manga_rename_toggle_button.setEnabled(True)
 
-        # ==========================================
-        # 🔹 DISCORD LOGIC
-        # ==========================================
         is_official_discord_url = 'discord.com' in url_text and is_any_discord_url
 
         if is_official_discord_url:
@@ -4209,11 +4169,10 @@ class DownloaderApp (QWidget ):
         if getattr(self, 'discord_download_scope', 'files') == 'messages':
             current_url = direct_api_url if direct_api_url else self.link_input.text().strip()
             
-            # extract_post_info returns 'discord' for kemono.cr/discord/server/... links
             service, _, _ = extract_post_info(current_url)
             if service == 'discord':
                 self.start_discord_pdf_save()
-                return # Stop the standard file download process completely!
+                return
 
         self.is_main_download_active = True
 
@@ -5960,7 +5919,7 @@ class DownloaderApp (QWidget ):
 
         if not self.is_fetcher_thread_running and self.processed_posts_count >= self.total_posts_to_process:
             if getattr(self, 'is_in_retry_session', False):
-                return  # Let _retry_session_finished handle the completion!
+                return
             self.finished_signal.emit(self.download_counter, self.skip_counter, self.cancellation_event.is_set(), self.all_kept_original_filenames)
 
     def _trigger_single_pdf_creation(self):
@@ -6385,9 +6344,6 @@ class DownloaderApp (QWidget ):
             
         if self.thread_pool:
             self.log_signal.emit("    Signaling worker pool to shut down...")
-            # Forcefully shut down the ThreadPoolExecutor. 
-            # Using cancel_futures=True instantly kills any pending tasks in the queue, 
-            # stopping a massive batch download dead in its tracks without waiting.
             self.thread_pool.shutdown(wait=False, cancel_futures=True)
             self.thread_pool = None
             self.active_futures = []
@@ -6419,7 +6375,7 @@ class DownloaderApp (QWidget ):
         and optionally shuts down the PC if requested.
         """
         if not getattr(self, 'is_main_download_active', True):
-            return  # Block ghost threads from re-triggering the end sequence!
+            return
             
         self.is_main_download_active = False
         if not self.finish_lock.acquire(blocking=False):
@@ -6757,12 +6713,10 @@ class DownloaderApp (QWidget ):
                     updated_permanent_errors.append(failed_job)
                     
             self.permanently_failed_files_for_dialog = updated_permanent_errors
-            # -------------------------------------------------------------------------
         else:
             raw_files_list = list(self.retryable_failed_files_info)
             self.retryable_failed_files_info.clear()
 
-        # --- THE FIX: Remove Duplicate Jobs ---
         unique_files = []
         seen_urls = set()
         
@@ -6773,11 +6727,9 @@ class DownloaderApp (QWidget ):
                     seen_urls.add(file_url)
                     unique_files.append(job)
             else:
-                # Fallback if a URL is somehow missing, keep the job so it fails naturally
                 unique_files.append(job)
                 
         self.files_for_current_retry_session = unique_files
-        # ------------------------------------
 
         self.log_signal.emit(f"🔄 Starting retry session for {len(self.files_for_current_retry_session)} unique file(s)...")
         self.set_ui_enabled(False)
@@ -6889,12 +6841,8 @@ class DownloaderApp (QWidget ):
         service = job_details.get('service', '')
         user_id = str(job_details.get('user_id', ''))
         
-        # --- THE FIX: Path Safety & Reconstruction ---
-        # 1. Check multiple keys the worker might have used to save the path
         override_dir = job_details.get('override_output_dir') or job_details.get('target_folder_path')
         
-        # 2. SAFETY FALLBACK: If the path is missing or is just the base directory, 
-        # reconstruct the creator subfolder manually so it doesn't dump in the root.
         base_dir = self.dir_input.text().strip()
         if not override_dir or os.path.normpath(override_dir) == os.path.normpath(base_dir):
             if service and user_id and hasattr(self, 'creator_name_cache'):
@@ -6903,7 +6851,6 @@ class DownloaderApp (QWidget ):
                 
                 if safe_creator_name:
                     override_dir = os.path.join(base_dir, safe_creator_name)
-        # -------------------------------------------
 
         ppw_init_args = {
             **common_args, 
@@ -6923,12 +6870,10 @@ class DownloaderApp (QWidget ):
         
         dl_count = result_tuple[0]
         skip_count = result_tuple[1]
-        retryable_errors = result_tuple[3] # Worker's list of soft errors
-        permanent_errors = result_tuple[4] # Worker's list of hard errors
+        retryable_errors = result_tuple[3]
+        permanent_errors = result_tuple[4]
 
-        # THE FIX: If the worker recorded ANY errors, the retry failed. Period.
         if retryable_errors or permanent_errors:
-            # Tell the retry manager this failed so it stays in the Error Dialog
             return False 
 
         is_successful_download = (dl_count > 0)
@@ -7027,7 +6972,6 @@ class DownloaderApp (QWidget ):
             self.pause_event.clear()
         self.is_paused = False
         
-        # --- THE FIX: Refresh the UI button count at the very end ---
         self._update_error_button_count()
 
     def toggle_active_log_view (self ):

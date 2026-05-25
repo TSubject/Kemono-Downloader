@@ -1,6 +1,5 @@
 import os
 import time
-# 🔹 UPGRADED: Using curl_cffi for the actual download stream to bypass CDN Cloudflare
 from curl_cffi import requests as cffi_requests
 from PyQt5.QtCore import QThread, pyqtSignal
 
@@ -35,7 +34,6 @@ class Saint2DownloadThread(QThread):
         os.makedirs(album_path, exist_ok=True)
         self.progress_signal.emit(f"   Saving to folder: '{album_name}'")
 
-        # 🔹 Create a persistent session that mimics Chrome to bypass the CDN
         session = cffi_requests.Session(impersonate="chrome120")
 
         for file_data in files_to_download:
@@ -52,26 +50,21 @@ class Saint2DownloadThread(QThread):
                 continue
 
             try:
-                # 🔹 Extract both headers and cookies from the client
                 headers = file_data.get('headers', {'Referer': self.saint2_url})
                 req_cookies = file_data.get('cookies', {})
                 
                 self.progress_signal.emit(f"       -> Downloading video stream: '{filename}'...")
                 
-                # 🔹 DEBUG LOGS: Print exactly what is being sent to the CDN
                 self.progress_signal.emit(f"       -> [DEBUG] Actual Link: {file_url}")
                 self.progress_signal.emit(f"       -> [DEBUG] Cookies Transferred: {len(req_cookies)} cookies found.")
                 
-                # 🔹 Inject the cookies into the session.get() request!
                 response = session.get(file_url, stream=True, timeout=120, headers=headers, cookies=req_cookies)
                 
-                # 🔹 DEBUG LOGS: Print exactly what the CDN replied with
                 content_type = response.headers.get('Content-Type', 'Unknown')
                 self.progress_signal.emit(f"       -> [DEBUG] CDN Response: {response.status_code} | Content-Type: {content_type}")
                 
                 response.raise_for_status()
 
-                # 🔹 CRITICAL CHECK: Abort if it's an HTML page disguised as an MP4!
                 if 'text/html' in content_type:
                     self.progress_signal.emit(f"   ❌ Blocked by CDN! Received a 42KB HTML error page instead of a video.")
                     skip_count += 1

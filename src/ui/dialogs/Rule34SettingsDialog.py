@@ -3,7 +3,7 @@ import os
 import urllib.request
 import re
 import json
-import sqlite3 # 👈 NEW: Required for the database
+import sqlite3
 from PyQt5.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, 
     QPushButton, QCheckBox, QSpinBox, QComboBox, QGroupBox, 
@@ -12,9 +12,6 @@ from PyQt5.QtWidgets import (
 from PyQt5.QtGui import QIcon
 from PyQt5.QtCore import Qt, QThread, pyqtSignal, QTimer, QEvent, QSize
 
-# ==========================================
-# 📖 HELP CONTENT DICTIONARY
-# ==========================================
 HELP_CONTENT = {
     "General Setup": (
         "<h3>🔑 General & API Setup</h3>"
@@ -68,9 +65,6 @@ HELP_CONTENT = {
     )
 }
 
-# ==========================================
-# 🧠 CUSTOM UI CLASSES
-# ==========================================
 class MultiCompleter(QCompleter):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -135,9 +129,6 @@ class FavoritesListWidget(QListWidget):
         else:
             super().keyPressEvent(event)
 
-# ==========================================
-# 📖 CONTEXTUAL HELP BUTTON
-# ==========================================
 class SectionHelpButton(QPushButton):
     """A reusable, small '?' button that pops up a contextual help dialog with advanced styling."""
     def __init__(self, title, text_content, parent=None):
@@ -199,9 +190,6 @@ class SectionHelpButton(QPushButton):
         """)
         msg.exec_()
 
-# ==========================================
-# BACKGROUND DOWNLOADER
-# ==========================================
 class HuggingFaceDownloadThread(QThread):
     progress_signal = pyqtSignal(int)
     finished_signal = pyqtSignal(bool, str)
@@ -224,9 +212,6 @@ class HuggingFaceDownloadThread(QThread):
         except Exception as e:
             self.finished_signal.emit(False, str(e))
 
-# ==========================================
-# MAIN DIALOG (3-COLUMN DASHBOARD)
-# ==========================================
 class Rule34SettingsDialog(QDialog):
     def __init__(self, main_app):
         super().__init__(main_app)
@@ -234,14 +219,11 @@ class Rule34SettingsDialog(QDialog):
         
         self.base_dir = self.main_app.app_base_dir
         
-        # 1. Appdata setup
         self.appdata_dir = os.path.join(self.base_dir, "appdata")
         os.makedirs(self.appdata_dir, exist_ok=True)
         
-        # [NEW] Point directly to our new SQLite database!
         self.CHAR_DB_PATH = os.path.join(self.appdata_dir, "characters.db")
         
-        # 2. Reroute ONLY the SVGs to the hidden PyInstaller folder
         if getattr(sys, 'frozen', False):
             asset_base = sys._MEIPASS
         else:
@@ -289,9 +271,6 @@ class Rule34SettingsDialog(QDialog):
         right_col = QVBoxLayout(self.right_container)
         right_col.setContentsMargins(0, 0, 0, 0)
 
-        # ==========================================
-        # LEFT COLUMN
-        # ==========================================
         creds_group = QGroupBox("🔑 API CREDENTIALS")
         creds_layout = QVBoxLayout()
         creds_header = QHBoxLayout()
@@ -345,9 +324,6 @@ class Rule34SettingsDialog(QDialog):
         filters_group.setLayout(filters_layout)
         left_col.addWidget(filters_group)
 
-        # ------------------------------------------
-        # 🚫 CONTENT SAFETY 
-        # ------------------------------------------
         safety_group = QGroupBox("🚫 CONTENT SAFETY")
         safety_main_layout = QHBoxLayout()
         checkboxes_layout = QVBoxLayout()
@@ -411,9 +387,6 @@ class Rule34SettingsDialog(QDialog):
         
         left_col.addStretch()
 
-        # ==========================================
-        # MIDDLE COLUMN
-        # ==========================================
         char_group = QGroupBox("📁 CHARACTER FOLDERS")
         char_layout = QVBoxLayout()
         
@@ -431,7 +404,7 @@ class Rule34SettingsDialog(QDialog):
         self.new_fav_input.setPlaceholderText("Ctrl+Down to harvest!")
         self.new_fav_input.textEdited.connect(self.on_text_edited)
         self.add_fav_btn = QPushButton("Add")
-        self.add_fav_btn.clicked.connect(self.add_character_to_db) # 👈 [NEW] DB Function!
+        self.add_fav_btn.clicked.connect(self.add_character_to_db)
         fav_input_layout.addWidget(self.new_fav_input)
         fav_input_layout.addWidget(self.add_fav_btn)
         char_layout.addLayout(fav_input_layout)
@@ -460,9 +433,6 @@ class Rule34SettingsDialog(QDialog):
         char_group.setLayout(char_layout)
         mid_col.addWidget(char_group)
 
-        # ==========================================
-        # RIGHT COLUMN
-        # ==========================================
         scene_group = QGroupBox("🖼️ SCENE / TAG FOLDERS (PRIORITY BASED)")
         scene_layout = QVBoxLayout()
         
@@ -578,9 +548,6 @@ class Rule34SettingsDialog(QDialog):
         settings_scroll.setWidget(scroll_content)
         master_layout.addWidget(settings_scroll)
 
-        # ==========================================
-        # BOTTOM BUTTONS
-        # ==========================================
         btn_layout = QHBoxLayout()
         btn_layout.setContentsMargins(0, 10, 0, 0) 
         
@@ -625,7 +592,6 @@ class Rule34SettingsDialog(QDialog):
             self.expand_scene_btn.setToolTip("Expand to Full Screen")
             self.scene_is_expanded = False
 
-    # --- 🧠 GITHUB FETCH LOGIC ---
     def fetch_github_aliases(self):
         if not self.GITHUB_RAW_URL or "YOUR_USERNAME" in self.GITHUB_RAW_URL:
             QMessageBox.warning(self, "Setup Required", "Please update the 'GITHUB_RAW_URL' in the code with your actual GitHub link!")
@@ -656,7 +622,6 @@ class Rule34SettingsDialog(QDialog):
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Failed to fetch rules from GitHub:\n{str(e)}")
 
-    # --- 🧠 SCENE MANAGER LOGIC ---
     def add_scene_tag(self):
         tags = [t.strip().lower() for t in self.scene_input.text().split(',') if t.strip()]
         for tag in tags:
@@ -683,7 +648,6 @@ class Rule34SettingsDialog(QDialog):
         for item in self.scene_list_widget.selectedItems():
             self.scene_list_widget.takeItem(self.scene_list_widget.row(item))
 
-    # --- 🧠 ALIAS MANAGER LOGIC ---
     def add_alias(self):
         text = self.alias_input.text().strip()
         if "=" in text:
@@ -696,7 +660,6 @@ class Rule34SettingsDialog(QDialog):
         for item in self.alias_list_widget.selectedItems():
             self.alias_list_widget.takeItem(self.alias_list_widget.row(item))
 
-    # --- LOAD/SAVE LOGIC ---
     def load_settings(self):
         settings = self.main_app.settings
         self.rating_combo.setCurrentIndex(int(settings.value("r34_rating_filter", 0)))
@@ -728,7 +691,6 @@ class Rule34SettingsDialog(QDialog):
         if alias_str:
             self.alias_list_widget.addItems(alias_str.split('||'))
         
-        # [NEW] Load Favorites directly from SQLite!
         if os.path.exists(self.CHAR_DB_PATH):
             try:
                 with sqlite3.connect(self.CHAR_DB_PATH) as conn:
@@ -783,11 +745,9 @@ class Rule34SettingsDialog(QDialog):
                 cursor.execute('PRAGMA journal_mode=WAL;')
                 
                 for new_char in reversed(new_chars):
-                    # Clean the master name just like the downloader does
                     master_part = new_char.split('=', 1)[0] if '=' in new_char else new_char
                     clean_master = re.sub(r'_+', '_', re.sub(r'\s+', '_', master_part.strip().lower()))
                     
-                    # Upsert: Insert as favorite, or upgrade existing tag to favorite!
                     cursor.execute('''
                         INSERT INTO Characters (character_name, gender, is_favorite, raw_string)
                         VALUES (?, 'Unknown', 1, ?)
@@ -796,7 +756,6 @@ class Rule34SettingsDialog(QDialog):
                             raw_string = excluded.raw_string
                     ''', (clean_master, new_char))
                     
-                    # Update UI
                     items = self.fav_list_widget.findItems(new_char, Qt.MatchExactly)
                     if not items:
                         self.fav_list_widget.insertItem(0, new_char)
@@ -820,7 +779,6 @@ class Rule34SettingsDialog(QDialog):
                 cursor.execute('PRAGMA journal_mode=WAL;')
                 
                 for char_string in chars_to_remove:
-                    # Downgrade them to a normal tag by setting is_favorite to 0
                     cursor.execute('''
                         UPDATE Characters 
                         SET is_favorite = 0 
@@ -828,7 +786,6 @@ class Rule34SettingsDialog(QDialog):
                     ''', (char_string,))
                 conn.commit()
 
-            # Remove from UI
             for item in selected_items:
                 self.fav_list_widget.takeItem(self.fav_list_widget.row(item))
                 
@@ -846,11 +803,9 @@ class Rule34SettingsDialog(QDialog):
         api_match = re.search(r'api_key=([a-zA-Z0-9_-]+)', current_creds)
         user_match = re.search(r'user_id=([0-9]+)', current_creds)
         
-        # Check if the URL belongs to ANY supported Booru site
         is_booru_url = any(site in current_url for site in ["rule34.xxx", "gelbooru.com", "danbooru.donmai.us"])
         
         if is_booru_url and api_match:
-            # We save it under the "r34_" key so the downloader thread can read it universally
             self.main_app.settings.setValue("r34_api_key", api_match.group(1))
             if user_match: 
                 self.main_app.settings.setValue("r34_user_id", user_match.group(1))
@@ -868,7 +823,6 @@ class Rule34SettingsDialog(QDialog):
         self.hf_progress_bar.setVisible(True)
         self.hf_progress_bar.setValue(0)
         
-        # [NEW] Save directly to the actual SQLite DB path! No more temp JSON!
         self.download_thread = HuggingFaceDownloadThread(
             self.ONLINE_CHAR_DB_URL, 
             self.CHAR_DB_PATH, 
@@ -883,7 +837,6 @@ class Rule34SettingsDialog(QDialog):
         if success:
             self.hf_download_btn.setText("✅ Offline Database Installed")
             
-            # Instantly reload the autocomplete UI with the fresh database!
             self.all_tags_cache.clear()
             self.setup_autocomplete()
             
@@ -895,7 +848,6 @@ class Rule34SettingsDialog(QDialog):
 
     def setup_autocomplete(self):
         self.all_tags_cache = []
-        # [NEW] Pull every character into the Autocomplete Cache instantly
         if os.path.exists(self.CHAR_DB_PATH):
             try:
                 with sqlite3.connect(self.CHAR_DB_PATH) as conn:

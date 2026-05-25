@@ -53,7 +53,6 @@ class DatabaseManager:
             )
         ''')
 
-        # --- NEW: Table to store the user's "Not Duplicates" decisions ---
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS IgnoredPairs (
                 hash1 TEXT,
@@ -62,7 +61,6 @@ class DatabaseManager:
             )
         ''')
 
-        # ADD THIS NEW TABLE:
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS TagLess (
                 hash TEXT PRIMARY KEY,
@@ -148,5 +146,4 @@ class DatabaseManager:
             self.conn.commit()
             return True
         except sqlite3.IntegrityError:
-            # File hash already exists in the TagLess table
             return False

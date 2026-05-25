@@ -12,7 +12,6 @@ from PyQt5.QtCore import QThread, pyqtSignal
 
 from PIL import Image
 import imagehash
-# Import the DatabaseManager from your core folder
 from ...core.database_manager import DatabaseManager
 
 class Rule34DownloadThread(QThread):
@@ -27,11 +26,9 @@ class Rule34DownloadThread(QThread):
         self.main_app = parent
         self.session = requests.Session()
         
-        # --- NEW: Threading Lock & Worker Limit ---
         self.db_lock = threading.Lock()
         self.max_workers = 4 
         
-        # Initialize the SQLite Database Manager
         self.db = DatabaseManager()
         
         self.session.headers.update({
@@ -40,9 +37,6 @@ class Rule34DownloadThread(QThread):
 
         self.tag_count_cache = {}
 
-        # ==========================================
-        # LOAD SETTINGS & CREDENTIALS
-        # ==========================================
         settings = self.main_app.settings
         
         custom_bl = str(settings.value("r34_custom_blacklist", ""))
@@ -90,7 +84,6 @@ class Rule34DownloadThread(QThread):
         scene_tags_str = settings.value("r34_scene_tags", "1girl,bikini,beach")
         self.ordered_scene_tags = [t.strip().lower() for t in scene_tags_str.split(',') if t.strip()]
 
-        # LOAD ALIAS DICTIONARY
         alias_str = settings.value("r34_tag_aliases", "1girl = solo, single, women")
         self.alias_map = {}
         for line in alias_str.split('||'):
@@ -100,9 +93,6 @@ class Rule34DownloadThread(QThread):
                 for a in aliases.split(','):
                     self.alias_map[a.strip().lower()] = master
 
-        # ==========================================
-        # LOAD CHARACTER SQLITE DATABASE
-        # ==========================================
         self.smart_sort = settings.value("r34_smart_sort", False, type=bool)
         self.known_characters_exact = set()
         self.known_characters_base = {} 
@@ -126,9 +116,6 @@ class Rule34DownloadThread(QThread):
                 except Exception as e:
                     self.main_app.log_signal.emit(f"[WARN] Failed to read characters.db: {e}")
 
-        # ==========================================
-        # ANTI-DUPLICATE HASH DATABASE
-        # ==========================================
         self.hash_db_path = os.path.join(self.main_app.user_data_path, "downloaded_hashes.json")
         self.hash_db = {}
         self.all_known_hashes = set()
@@ -203,25 +190,20 @@ class Rule34DownloadThread(QThread):
             
         image_tags = tags_string.lower().split()
         
-        # 1. VIP Whitelist completely overrides everything
         for tag in image_tags:
             if tag in self.active_whitelist: 
                 return True, "vip", tag
 
         for tag in image_tags:
-            # Safely ignore negation tags (e.g., "not_furry")
             if tag.startswith('not_'): 
                 continue 
                 
-            # 2. Smart Booru-Style Blacklist Evaluation
             for bad_word in self.active_blacklist:
                 if '*' in bad_word:
-                    # User explicitly requested a wildcard (e.g., *spider*)
                     clean_pattern = bad_word.replace('*', '')
                     if clean_pattern in tag:
                         return False, "wildcard", bad_word
                 else:
-                    # EXACT MATCH ONLY! (Prevents 'spider' from blocking 'spider_man')
                     if tag == bad_word:
                         return False, "blacklist", bad_word
                         
@@ -270,9 +252,6 @@ class Rule34DownloadThread(QThread):
 
         return count
 
-    # ==========================================
-    # 🔹 NEW: THREAD-SAFE DOWNLOAD WORKER
-    # ==========================================
     def _execute_download_task(self, file_url, save_path, file_hash, post_tags_list, search_category, post, log_folder_path, safe_type, trigger_word, original_tags):
         """Runs concurrently in the background without touching the main UI directly."""
         if self.main_app.cancellation_event.is_set(): 
@@ -281,7 +260,6 @@ class Rule34DownloadThread(QThread):
         if self.download_file(file_url, save_path):
             calculated_phash, hash_warn = self.calculate_phash_safe(save_path)
             
-            # --- PROTECT DATABASE INJECTIONS ---
             with self.db_lock:
                 if file_hash:
                     if file_hash not in self.hash_db[search_category]:
@@ -296,7 +274,6 @@ class Rule34DownloadThread(QThread):
                     phash=calculated_phash
                 )
 
-            # Build the log string (do not emit here!)
             score_val = post.get('score', '0')
             rating_val = post.get('rating', 'q').upper()
             res = f"{post.get('width', '?')}x{post.get('height', '?')}"
@@ -325,9 +302,6 @@ class Rule34DownloadThread(QThread):
         
         if not tags: return
 
-        # ==========================================
-        # TERMINAL-STYLE BANNER
-        # ==========================================
         now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         rating_map = ["All Ratings", "Safe Only", "Questionable & Safe", "Explicit Only"]
         rating_str = rating_map[self.rating_filter] if 0 <= self.rating_filter <= 3 else "Unknown"
@@ -374,14 +348,12 @@ class Rule34DownloadThread(QThread):
 
                 self.main_app.log_signal.emit(f"\n[NETWORK] Fetching Page {pid + 1} | Retrieved {len(posts)} indices...")
 
-                # --- NEW: Task Queue for the current page ---
                 download_tasks = []
 
                 for post in posts:
                     if self.main_app.cancellation_event.is_set(): break
                     if not isinstance(post, dict): continue
 
-                    # Ensures the queue doesn't grab more files than your max download limit allows
                     if self.max_downloads > 0 and (total_count + len(download_tasks)) >= self.max_downloads:
                         self.main_app.log_signal.emit(f"\n[CONSTRAINT] Maximum download limit ({self.max_downloads}) reached on queue. Terminating sequence.")
                         break
@@ -427,9 +399,6 @@ class Rule34DownloadThread(QThread):
 
                     filename = f"{post_id}{ext}"
 
-                    # ==========================================
-                    # FOLDER ROUTING
-                    # ==========================================
                     char_folders = [] 
                     scene_folder_name = ""
 
@@ -570,20 +539,15 @@ class Rule34DownloadThread(QThread):
                     os.makedirs(final_output_dir, exist_ok=True)
                     save_path = os.path.join(final_output_dir, filename)
 
-                    # --- QUEUE THE TASK ---
                     if not os.path.exists(save_path):
                         download_tasks.append((file_url, save_path, file_hash, post_tags_list, search_category, post, log_folder_path, safe_type, trigger_word, tags))
 
-                # ==========================================
-                # EXECUTE THE BATCH SAFELY
-                # ==========================================
                 if download_tasks:
                     self.main_app.log_signal.emit(f"\n[⚡ TURBO] Firing up {self.max_workers} concurrent workers for {len(download_tasks)} files...")
                     
                     with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
                         futures = {executor.submit(self._execute_download_task, *task): task for task in download_tasks}
                         
-                        # as_completed ensures we safely emit the logs on the main thread!
                         for future in as_completed(futures):
                             if self.main_app.cancellation_event.is_set():
                                 break
@@ -602,7 +566,6 @@ class Rule34DownloadThread(QThread):
                                                 json.dump(self.hash_db, f, indent=4)
                                         except Exception: pass
 
-                # Break main loop if max downloads reached
                 if self.max_downloads > 0 and total_count >= self.max_downloads:
                     break
 
@@ -627,9 +590,6 @@ class Rule34DownloadThread(QThread):
         self.main_app.log_signal.emit(finish_msg)
         self.finished_signal.emit(total_count, 0, self.main_app.cancellation_event.is_set())
 
-    # ==========================================
-    # 🔹 NEW: SAFE PHASH CALCULATION
-    # ==========================================
     def calculate_phash_safe(self, file_path):
         """Generates a 256-bit Perceptual Hash. Returns (hash, warning_message)."""
         valid_exts = {'.jpg', '.jpeg', '.png', '.bmp', '.webp'}
@@ -642,7 +602,6 @@ class Rule34DownloadThread(QThread):
             img_hash = imagehash.phash(img, hash_size=16) 
             return str(img_hash), ""
         except Exception as e:
-            # Returns warning as a string instead of emitting immediately!
             return None, f"[WARN] Failed to calculate pHash for {os.path.basename(file_path)}: {e}"
 
     def calculate_phash(self, file_path):
