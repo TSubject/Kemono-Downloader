@@ -194,7 +194,8 @@ class CoomerfansThread(QThread):
         for index, media_url in enumerate(media_urls, 1):
             original_file_name = media_url.split('/')[-1].split('?')[0]
             ext = os.path.splitext(original_file_name)[1]
-            is_video = original_file_name.lower().endswith(('.mp4', '.webm'))
+            from ..config.constants import VIDEO_EXTENSIONS
+            is_video = ext.lower() in VIDEO_EXTENSIONS
             
             if is_video and skip_videos:
                 continue
