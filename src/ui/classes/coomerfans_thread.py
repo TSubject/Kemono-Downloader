@@ -2,6 +2,7 @@ import os
 import time
 import threading
 import urllib.parse
+import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from PyQt5.QtCore import QThread, pyqtSignal
 from ...core.coomerfans_client import CoomerfansClient
@@ -28,6 +29,17 @@ class CoomerfansThread(QThread):
         
         self.is_rate_limited = False
         self.rate_limit_lock = threading.Lock()
+        self.rate_limit_step = 0
+        
+        self.skip_file_size_mb = None
+        if hasattr(main_app, 'skip_words_input'):
+            raw_text = main_app.skip_words_input.text().strip()
+            if raw_text:
+                size_pattern = re.compile(r'\[(\d+)\]')
+                for part in raw_text.split(','):
+                    match = size_pattern.fullmatch(part.strip())
+                    if match:
+                        self.skip_file_size_mb = int(match.group(1))
 
     def log(self, message):
         if self.main_app and hasattr(self.main_app, 'log_signal'):
@@ -61,12 +73,20 @@ class CoomerfansThread(QThread):
         with self.rate_limit_lock:
             if not self.is_rate_limited:
                 self.is_rate_limited = True
-                self.log(f"   ⚠️ Rate limit hit on {item_name}. Pausing ALL threads for 15s to cool down...")
-                self._smart_sleep(15)
+                sleep_times = [30, 45, 60]
+                sleep_time = sleep_times[min(self.rate_limit_step, 2)]
+                self.log(f"   ⚠️ Rate limit hit on {item_name}. Pausing ALL threads for {sleep_time}s to cool down...")
+                self._smart_sleep(sleep_time)
+                self.rate_limit_step += 1
                 self.is_rate_limited = False
                 
         while self.is_rate_limited and self.is_running:
             time.sleep(0.5)
+
+    def sanitize_folder_name(self, name):
+        name = re.sub(r'[\\/:*?"<>|]', '', name)
+        name = name.replace('\n', '').replace('\r', '').strip()
+        return name[:100].strip()
 
     def run(self):
         try:
@@ -80,7 +100,11 @@ class CoomerfansThread(QThread):
 
             if "/p/" in self.url:
                 self.log("Single post detected. Fetching media...")
-                media_tasks = self._collect_post_tasks(self.url, creator_folder)
+                
+                post_id = paths[1] if len(paths) > 1 else ""
+                post_info = {'url': self.url, 'id': post_id, 'title': 'Post'}
+                
+                media_tasks = self._collect_post_tasks(self.url, creator_folder, post_info)
                 self._run_parallel_downloads(media_tasks)
             else:
                 self.log("Profile detected. Scraping all pages...")
@@ -91,19 +115,19 @@ class CoomerfansThread(QThread):
 
                     self.log(f"Scanning Page {page}...")
                     page_url = f"{self.url}?page={page}"
-                    post_urls = self.client.get_posts_from_page(page_url)
+                    post_items = self.client.get_posts_from_page(page_url)
 
-                    if not post_urls:
+                    if not post_items:
                         self.log("No more posts found. Reached the end of the profile.")
                         break
 
-                    self.log(f"Found {len(post_urls)} posts on page {page}. Queuing downloads...")
+                    self.log(f"Found {len(post_items)} posts on page {page}. Queuing downloads...")
 
                     all_tasks = []
-                    for post_url in post_urls:
+                    for post_item in post_items:
                         if not self.check_pause_and_cancel():
                             break
-                        all_tasks.extend(self._collect_post_tasks(post_url, creator_folder))
+                        all_tasks.extend(self._collect_post_tasks(post_item['url'], creator_folder, post_item))
 
                     self._run_parallel_downloads(all_tasks)
                     page += 1
@@ -117,21 +141,91 @@ class CoomerfansThread(QThread):
             self.log(f"Coomerfans Engine Error: {str(e)}")
 
 
-    def _collect_post_tasks(self, post_url, folder):
-        media_urls = self.client.get_media_from_post(post_url)
+    def _collect_post_tasks(self, post_url, folder, post_info=None):
+        media_urls, page_title, post_date = self.client.get_media_from_post(post_url)
 
         skip_images = hasattr(self.main_app, 'radio_videos') and self.main_app.radio_videos.isChecked()
         skip_videos = hasattr(self.main_app, 'radio_images') and self.main_app.radio_images.isChecked()
+        
+        use_subfolder = hasattr(self.main_app, 'use_subfolder_per_post_checkbox') and self.main_app.use_subfolder_per_post_checkbox.isChecked()
+        
+        if use_subfolder and post_info:
+            title = post_info.get('title', 'Post')
+            if title == 'Post' and page_title:
+                title = page_title
+                
+            post_id = post_info.get('id', '')
+            safe_title = self.sanitize_folder_name(title)
+            
+            if safe_title:
+                subfolder_name = f"{safe_title} [{post_id}]" if post_id else safe_title
+            else:
+                subfolder_name = str(post_id) if post_id else "Unknown Post"
+
+            use_date_prefix = hasattr(self.main_app, 'date_prefix_checkbox') and self.main_app.date_prefix_checkbox.isChecked()
+            if use_date_prefix and post_date:
+                parts = post_date.split('-')
+                if len(parts) >= 3:
+                    date_format = getattr(self.main_app, 'date_prefix_format', 'YYYY-MM-DD {post}')
+                    prefix_str = date_format.replace('YYYY', parts[0]).replace('MM', parts[1]).replace('DD', parts[2])
+                    if '{post}' in prefix_str:
+                        subfolder_name = prefix_str.replace('{post}', subfolder_name)
+                    else:
+                        subfolder_name = f"{prefix_str} {subfolder_name}".strip()
+                else:
+                    subfolder_name = f"[{post_date}] {subfolder_name}"
+                    
+            subfolder_name = self.sanitize_folder_name(subfolder_name)
+            folder = os.path.join(folder, subfolder_name)
+
+        rename_style = None
+        if hasattr(self.main_app, 'manga_mode_checkbox') and self.main_app.manga_mode_checkbox.isChecked():
+            rename_style = getattr(self.main_app, 'manga_filename_style', "post_title")
+            
+        post_title_str = post_info.get('title', '') if post_info else ''
+        if not post_title_str and page_title:
+            post_title_str = page_title
+        if not post_title_str:
+            post_title_str = 'Post'
+            
+        post_title_str = self.sanitize_folder_name(post_title_str)
 
         tasks = []
-        for media_url in media_urls:
-            is_video = media_url.endswith('.mp4') or media_url.endswith('.webm')
+        for index, media_url in enumerate(media_urls, 1):
+            original_file_name = media_url.split('/')[-1].split('?')[0]
+            ext = os.path.splitext(original_file_name)[1]
+            is_video = original_file_name.lower().endswith(('.mp4', '.webm'))
+            
             if is_video and skip_videos:
                 continue
             if not is_video and skip_images:
                 continue
 
-            file_name = media_url.split('/')[-1].split('?')[0]
+            # Default to original
+            file_name = original_file_name
+
+            # Renaming Logic
+            if rename_style == "post_title":
+                if len(media_urls) > 1:
+                    file_name = f"{post_title_str}_{index}{ext}"
+                else:
+                    file_name = f"{post_title_str}{ext}"
+            elif rename_style == "date_post_title":
+                date_prefix = f"[{post_date}] " if post_date else ""
+                if len(media_urls) > 1:
+                    file_name = f"{date_prefix}{post_title_str}_{index}{ext}"
+                else:
+                    file_name = f"{date_prefix}{post_title_str}{ext}"
+                    
+            # Sanitize file name but preserve extension
+            base_name, ext_part = os.path.splitext(file_name)
+            safe_base = self.sanitize_folder_name(base_name)
+            
+            # Ensure total length doesn't exceed reasonable limits (e.g., 200 chars to be safe on Windows)
+            max_base_len = 200 - len(ext_part)
+            safe_base = safe_base[:max_base_len].strip()
+            file_name = f"{safe_base}{ext_part}"
+
             save_path = os.path.join(folder, file_name)
 
             if os.path.exists(save_path):
@@ -139,6 +233,7 @@ class CoomerfansThread(QThread):
                     self.skip_count += 1
                 continue
 
+            os.makedirs(folder, exist_ok=True)
             tasks.append((media_url, save_path))
 
         return tasks
@@ -194,8 +289,17 @@ class CoomerfansThread(QThread):
 
         try:
             total_size = int(response.headers.get('content-length', 0))
+            
+            if self.skip_file_size_mb is not None and total_size > 0:
+                total_size_mb = total_size / (1024 * 1024)
+                if total_size_mb < self.skip_file_size_mb:
+                    self.log(f"Skipping {file_name} (Size {total_size_mb:.2f}MB is below {self.skip_file_size_mb}MB threshold)")
+                    with self._count_lock:
+                        self.skip_count += 1
+                    return
+            
             downloaded = 0
-            file_type = "Video:" if url.endswith('.mp4') or url.endswith('.webm') else "Image:"
+            file_type = "Video:" if file_name.lower().endswith(('.mp4', '.webm')) else "Image:"
 
             with open(save_path, 'wb') as f:
                 for chunk in response.iter_content(chunk_size=8192):
@@ -217,12 +321,13 @@ class CoomerfansThread(QThread):
 
             if self.is_running:
                 self.overall_progress_signal.emit(1, 1)
+                self.rate_limit_step = 0
+                self.log(f"✓ {file_name} ({url})")
                 with self._count_lock:
                     self.download_count += 1
-                self.log(f"✓ {file_name}")
-
+                
         except Exception as e:
-            self.log(f"Failed to download {url}: {e}")
+            self.log(f"Error saving {file_name}: {e}")
 
     def stop(self):
         self.is_running = False

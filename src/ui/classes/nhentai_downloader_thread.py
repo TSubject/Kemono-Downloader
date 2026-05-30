@@ -4,6 +4,7 @@ import requests
 from PyQt5.QtCore import QThread, pyqtSignal
 
 from ...utils.file_utils import clean_folder_name
+from ...core.database_manager import DatabaseManager
 
 
 class NhentaiDownloadThread(QThread):
@@ -23,6 +24,7 @@ class NhentaiDownloadThread(QThread):
         self.output_dir = output_dir
         self.is_cancelled = False
         self.proxies = None
+        self.db = DatabaseManager()
 
     def run(self):
         if self.proxies:
@@ -49,6 +51,27 @@ class NhentaiDownloadThread(QThread):
         download_count = 0
         skip_count = 0
         total_pages = len(pages_info)
+        
+        db_gallery_id = f"nhentai_{gallery_id}"
+        if self.db.check_manga_exists(db_gallery_id):
+            self.progress_signal.emit("   ✅ Gallery already in database. Skipping download.")
+            self.finished_signal.emit(0, total_pages, False)
+            return
+
+        artist_name = None
+        tags_list = []
+        for tag_info in self.gallery_data.get('tags', []):
+            tag_type = tag_info.get('type')
+            tag_name = tag_info.get('name')
+            if not tag_name:
+                continue
+            if tag_type == 'artist':
+                if artist_name:
+                    artist_name += f", {tag_name}"
+                else:
+                    artist_name = tag_name
+            else:
+                tags_list.append(tag_name)
 
         scraper = requests.Session()
         
@@ -103,6 +126,9 @@ class NhentaiDownloadThread(QThread):
                 skip_count += 1
 
             time.sleep(0.5)
+
+        if not self.is_cancelled and download_count + skip_count == total_pages and total_pages > 0:
+            self.db.record_manga_download(db_gallery_id, "nhentai", title, save_path, artist=artist_name, tags_list=tags_list)
 
         self.finished_signal.emit(download_count, skip_count, self.is_cancelled)
 

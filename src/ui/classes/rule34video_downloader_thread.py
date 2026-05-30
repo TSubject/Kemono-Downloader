@@ -28,7 +28,7 @@ class Rule34VideoDownloadThread(QThread):
         download_count = 0
         skip_count = 0
 
-        video_title, final_video_url = fetch_rule34video_data(self.video_url, self.progress_signal.emit)
+        video_title, final_video_url, tags_list = fetch_rule34video_data(self.video_url, self.progress_signal.emit)
 
         if not final_video_url:
             self.progress_signal.emit("❌ Failed to get video data. Aborting.")
@@ -75,10 +75,11 @@ class Rule34VideoDownloadThread(QThread):
             else:
                 download_count = 1
                 
-                self.db.record_tagless_download(
+                self.db.record_download(
                     file_path=filepath,
                     file_name=filename,
                     file_hash=None,
+                    tags_list=tags_list,
                     phash=None
                 )
         

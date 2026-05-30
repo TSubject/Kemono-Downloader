@@ -70,6 +70,31 @@ class DatabaseManager:
             )
         ''')
 
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS MangaGalleries (
+                gallery_id TEXT PRIMARY KEY,
+                site TEXT NOT NULL,
+                title TEXT,
+                folder_path TEXT,
+                artist TEXT
+            )
+        ''')
+        
+        try:
+            cursor.execute("ALTER TABLE MangaGalleries ADD COLUMN artist TEXT")
+        except sqlite3.OperationalError:
+            pass
+        
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS MangaTags (
+                gallery_id TEXT,
+                tag_id INTEGER,
+                PRIMARY KEY (gallery_id, tag_id),
+                FOREIGN KEY (gallery_id) REFERENCES MangaGalleries (gallery_id),
+                FOREIGN KEY (tag_id) REFERENCES Tags (tag_id)
+            )
+        ''')
+
         self.conn.commit()
 
     def generate_md5(self, file_path):
@@ -107,7 +132,7 @@ class DatabaseManager:
             return False
             
         for tag in tags_list:
-            clean_tag = tag.strip().lower()
+            clean_tag = tag.strip().lower().replace(' ', '_')
             if not clean_tag:
                 continue
                 
@@ -147,3 +172,45 @@ class DatabaseManager:
             return True
         except sqlite3.IntegrityError:
             return False
+
+    def check_manga_exists(self, gallery_id):
+        cursor = self.conn.cursor()
+        cursor.execute('SELECT 1 FROM MangaGalleries WHERE gallery_id = ?', (gallery_id,))
+        return cursor.fetchone() is not None
+
+    def record_manga_download(self, gallery_id, site, title, folder_path, artist=None, tags_list=None):
+        if tags_list is None:
+            tags_list = []
+
+        cursor = self.conn.cursor()
+        
+        try:
+            cursor.execute('''
+                INSERT INTO MangaGalleries (gallery_id, site, title, folder_path, artist)
+                VALUES (?, ?, ?, ?, ?)
+            ''', (gallery_id, site, title, folder_path, artist))
+        except sqlite3.IntegrityError:
+            return False
+            
+        for tag in tags_list:
+            clean_tag = tag.strip().lower().replace(' ', '_')
+            if not clean_tag:
+                continue
+                
+            cursor.execute('''
+                INSERT OR IGNORE INTO Tags (tag_name)
+                VALUES (?)
+            ''', (clean_tag,))
+            
+            cursor.execute('SELECT tag_id FROM Tags WHERE tag_name = ?', (clean_tag,))
+            tag_row = cursor.fetchone()
+            
+            if tag_row:
+                tag_id = tag_row[0]
+                cursor.execute('''
+                    INSERT OR IGNORE INTO MangaTags (gallery_id, tag_id)
+                    VALUES (?, ?)
+                ''', (gallery_id, tag_id))
+        
+        self.conn.commit()
+        return True

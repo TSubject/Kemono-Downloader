@@ -4,6 +4,7 @@ import requests
 from PyQt5.QtCore import QThread, pyqtSignal
 from ...core.hentaifox_client import get_gallery_metadata, get_image_link_for_page, get_gallery_id
 from ...utils.file_utils import clean_folder_name
+from ...core.database_manager import DatabaseManager
 
 class HentaiFoxDownloadThread(QThread):
     progress_signal = pyqtSignal(str)
@@ -17,9 +18,16 @@ class HentaiFoxDownloadThread(QThread):
         self.is_running = True
         self.downloaded_count = 0
         self.skipped_count = 0
+        self.db = DatabaseManager()
 
     def run(self):
         try:
+            db_gallery_id = f"hentaifox_{self.gallery_id}"
+            if self.db.check_manga_exists(db_gallery_id):
+                self.progress_signal.emit("✅ Gallery already in database. Skipping download.")
+                self.finished_signal.emit(0, 0, False, [])
+                return
+
             self.progress_signal.emit(f"🔍 [HentaiFox] Fetching metadata for ID: {self.gallery_id}...")
             
             try:
@@ -31,6 +39,8 @@ class HentaiFoxDownloadThread(QThread):
 
             title = clean_folder_name(data['title'])
             total_pages = data['total_pages']
+            tags = data.get('tags', [])
+            artist = data.get('artist')
             
             save_folder = os.path.join(self.output_dir, f"[{self.gallery_id}] {title}")
             os.makedirs(save_folder, exist_ok=True)
@@ -82,6 +92,9 @@ class HentaiFoxDownloadThread(QThread):
                 f"   - Skipped: {self.skipped_count}\n"
             )
             self.progress_signal.emit(summary)
+            
+            if self.is_running and self.downloaded_count + self.skipped_count == total_pages and total_pages > 0:
+                self.db.record_manga_download(db_gallery_id, "hentaifox", title, save_folder, artist=artist, tags_list=tags)
 
         except Exception as e:
             self.progress_signal.emit(f"❌ Critical Error: {str(e)}")

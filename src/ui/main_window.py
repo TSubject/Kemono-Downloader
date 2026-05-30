@@ -350,6 +350,14 @@ class DownloaderApp (QWidget ):
                 'filters_enabled': False,
                 'force_radio': 'radio_all'
             },
+            'coomerfans': {
+                'enabled_radios': ['radio_all', 'radio_videos', 'radio_images'], 
+                'enabled_checkboxes': [],
+                'advanced_enabled': True,
+                'filters_enabled': False,
+                'force_radio': 'radio_all',
+                'allowed_advanced': ['use_subfolder_per_post_checkbox', 'manga_mode_checkbox', 'manga_rename_toggle_button', 'date_prefix_checkbox']
+            },
             'deviantart': {
                 'enabled_radios': ['radio_all', 'radio_images', 'radio_only_archives'],
                 'enabled_checkboxes': [],
@@ -366,6 +374,7 @@ class DownloaderApp (QWidget ):
                 'force_radio': 'radio_all'
             }
         }
+
 
 
         print(f"ℹ️ Known.txt will be loaded/saved at: {self.config_file}")
@@ -392,7 +401,7 @@ class DownloaderApp (QWidget ):
         self.download_location_label_widget = None
         self.remove_from_filename_label_widget = None
         self.skip_words_label_widget = None
-        self.setWindowTitle("Kemono Downloader v9.1.2")
+        self.setWindowTitle("Kemono Downloader v9.1.3")
         setup_ui(self)
         self._connect_signals()
 
@@ -3651,6 +3660,7 @@ class DownloaderApp (QWidget ):
             return
 
         is_single_post = bool(post_id)
+        is_coomerfans = 'coomerfans.com' in url_text.lower()
         current_style = self.manga_filename_style
         new_style = ""
         
@@ -3667,6 +3677,11 @@ class DownloaderApp (QWidget ):
                 new_style = STYLE_POST_TITLE  
              else:
                 new_style = STYLE_POST_TITLE
+        elif service == 'coomerfans' or is_coomerfans:
+             if current_style == STYLE_POST_TITLE:
+                 new_style = STYLE_DATE_POST_TITLE
+             else:
+                 new_style = STYLE_POST_TITLE
         else:
              if current_style == STYLE_POST_TITLE:
                 new_style = STYLE_ORIGINAL_NAME 
@@ -4078,10 +4093,19 @@ class DownloaderApp (QWidget ):
             if hasattr(self, 'manga_rename_toggle_button') and self.manga_rename_toggle_button:
                 self.manga_rename_toggle_button.setEnabled(True)
             
-        elif service == 'erome' or 'erome.com' in url_text.lower() or is_coomerfans:
+        elif service == 'erome' or 'erome.com' in url_text.lower():
             self._apply_ui_profile('erome')
             if hasattr(self, 'manga_rename_toggle_button') and self.manga_rename_toggle_button:
                 self.manga_rename_toggle_button.setEnabled(True)
+                
+        elif is_coomerfans:
+            self._apply_ui_profile('coomerfans')
+            if hasattr(self, 'manga_rename_toggle_button') and self.manga_rename_toggle_button:
+                self.manga_rename_toggle_button.setEnabled(True)
+            if hasattr(self, 'skip_words_input') and self.skip_words_input:
+                self.skip_words_input.setEnabled(True)
+            if hasattr(self, 'skip_scope_toggle_button') and self.skip_scope_toggle_button:
+                self.skip_scope_toggle_button.setEnabled(True)
 
         elif is_hotleaks:
             self.filter_group_box.setVisible(False)

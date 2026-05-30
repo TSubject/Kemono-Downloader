@@ -17,14 +17,14 @@ def get_gallery_id(url_or_id):
 
 def get_gallery_metadata(gallery_id):
     """
-    Fetches the main gallery page to get the Title and Total Pages.
-    Equivalent to the first part of the 'hentaifox' function in .sh file.
+    Fetches the main gallery page to get the Title, Total Pages, Tags, and Artists.
     """
     url = f"{BASE_URL}/gallery/{gallery_id}/"
     response = requests.get(url, headers=HEADERS)
     response.raise_for_status()
     html = response.text
     
+    soup = BeautifulSoup(html, "html.parser")
 
     title_match = re.search(r'<title>(.*?)</title>', html)
     title = title_match.group(1).replace(" - HentaiFox", "").strip() if title_match else f"Gallery {gallery_id}"
@@ -35,10 +35,30 @@ def get_gallery_metadata(gallery_id):
     
     total_pages = int(pages_match.group(1))
     
+    tags_list = []
+    tags_ul = soup.find('ul', class_='tags')
+    if tags_ul:
+        for a_tag in tags_ul.find_all('a', class_='tag_btn'):
+            strings = list(a_tag.stripped_strings)
+            if strings:
+                tags_list.append(strings[0])
+                
+    artist_list = []
+    artists_ul = soup.find('ul', class_='artists')
+    if artists_ul:
+        for a_tag in artists_ul.find_all('a', class_='tag_btn'):
+            strings = list(a_tag.stripped_strings)
+            if strings:
+                artist_list.append(strings[0])
+                
+    artist_string = ", ".join(artist_list) if artist_list else None
+    
     return {
         "id": gallery_id,
         "title": title,
-        "total_pages": total_pages
+        "total_pages": total_pages,
+        "tags": tags_list,
+        "artist": artist_string
     }
 
 def get_image_link_for_page(gallery_id, page_num):
