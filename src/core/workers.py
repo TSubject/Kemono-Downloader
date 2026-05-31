@@ -1637,7 +1637,9 @@ class PostProcessorWorker:
                         if file_extension == 'pdf':
                             font_path = ""
                             if self.project_root_dir:
-                                font_path = os.path.join(self.project_root_dir, 'data', 'dejavu-sans', 'DejaVuSans.ttf')
+                                import sys
+                                base_dir = getattr(sys, '_MEIPASS', self.project_root_dir)
+                                font_path = os.path.join(base_dir, 'data', 'dejavu-sans', 'DejaVuSans.ttf')
                             
                             if self.text_only_scope == 'comments':
                                 common_content_data['comments_list_for_pdf'] = comments_data

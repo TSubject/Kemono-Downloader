@@ -1922,8 +1922,9 @@ class DownloaderApp (QWidget ):
             all_messages.sort(key=lambda x: x.get('published', ''))
         except Exception:
             all_messages.reverse()
-
-        font_path = os.path.join(self.app_base_dir, 'data', 'dejavu-sans', 'DejaVuSans.ttf')
+        import sys
+        font_base_dir = getattr(sys, '_MEIPASS', self.app_base_dir)
+        font_path = os.path.join(font_base_dir, 'data', 'dejavu-sans', 'DejaVuSans.ttf')
 
         success = create_pdf_from_discord_messages(
             all_messages,
@@ -5978,7 +5979,9 @@ class DownloaderApp (QWidget ):
              
         output_path = os.path.join(base_dir, filename)
 
-        font_path = os.path.join(self.app_base_dir, 'data', 'dejavu-sans', 'DejaVuSans.ttf')
+        import sys
+        font_base_dir = getattr(sys, '_MEIPASS', self.app_base_dir)
+        font_path = os.path.join(font_base_dir, 'data', 'dejavu-sans', 'DejaVuSans.ttf')
         add_info = True 
         if hasattr(self, 'more_options_dialog') and self.more_options_dialog:
             add_info = self.more_options_dialog.get_add_info_state()

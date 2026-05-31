@@ -108,7 +108,9 @@ class DiscordDownloadThread(QThread):
         self.progress_label_signal.emit(f"Collected {len(all_messages)} total messages. Generating PDF...")
         all_messages.reverse()
         
-        font_path = os.path.join(self.app_base_dir, 'data', 'dejavu-sans', 'DejaVuSans.ttf')
+        import sys
+        font_base_dir = getattr(sys, '_MEIPASS', self.app_base_dir)
+        font_path = os.path.join(font_base_dir, 'data', 'dejavu-sans', 'DejaVuSans.ttf')
         output_filepath = os.path.join(self.output_dir, f"discord_{self.server_id}_{self.channel_id or 'server'}.pdf")
 
         success = create_pdf_from_discord_messages(
