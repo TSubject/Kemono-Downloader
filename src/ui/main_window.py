@@ -267,6 +267,7 @@ class DownloaderApp (QWidget ):
         self.favorite_mode_artists_button = None
         self.favorite_mode_posts_button = None
         self.standard_action_buttons_widget = None
+        self.tag_batch_button = None
         self.bottom_action_buttons_stack = None
         self.main_log_output = None
         self.external_log_output = None
@@ -1550,6 +1551,8 @@ class DownloaderApp (QWidget ):
             self .history_button .clicked .connect (self ._show_download_history_dialog )
         if hasattr (self ,'error_btn'):
             self .error_btn .clicked .connect (self ._show_error_files_dialog )
+        if hasattr (self ,'tag_batch_button'):
+            self .tag_batch_button .clicked .connect (self ._show_tag_batch_dialog )
         if hasattr(self, 'support_button'): 
             self.support_button.clicked.connect(self._show_support_dialog)
 
@@ -2404,6 +2407,17 @@ class DownloaderApp (QWidget ):
                     
         except ImportError:
             self.log_signal.emit("⚠️ Rule34SettingsDialog file not created yet!")
+
+    def _show_tag_batch_dialog(self):
+        """Opens the tag-based batch download dialog."""
+        try:
+            from .dialogs.TagBatchDownloadDialog import TagBatchDownloadDialog
+
+            dialog = TagBatchDownloadDialog(self)
+            dialog.exec_()
+
+        except ImportError as exc:
+            self.log_signal.emit(f"TagBatchDownloadDialog could not be loaded: {exc}")
 
     def _show_support_dialog(self): 
         """Shows the support/donation dialog."""

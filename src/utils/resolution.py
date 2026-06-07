@@ -355,6 +355,9 @@ def setup_ui(main_app):
     main_app.add_queue_btn.setToolTip("Save current settings as a job for later execution.")
     main_app.add_queue_btn.clicked.connect(main_app.add_current_settings_to_queue)
 
+    main_app.tag_batch_button = QPushButton("Tag Batch")
+    main_app.tag_batch_button.setToolTip("Open tag-based batch download for Danbooru, Gelbooru, and Rule34.")
+
     main_app.pause_btn = QPushButton("⏸️ Pause Download")
     main_app.pause_btn.setEnabled(False)
     main_app.pause_btn.clicked.connect(main_app._handle_pause_resume_action)
@@ -366,6 +369,7 @@ def setup_ui(main_app):
     main_app.error_btn.setEnabled(True)
     btn_layout.addWidget(main_app.download_btn)
     btn_layout.addWidget(main_app.add_queue_btn) 
+    btn_layout.addWidget(main_app.tag_batch_button)
     btn_layout.addWidget(main_app.pause_btn)
     btn_layout.addWidget(main_app.cancel_btn)
     btn_layout.addWidget(main_app.error_btn)
