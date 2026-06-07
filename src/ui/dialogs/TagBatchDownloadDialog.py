@@ -1,5 +1,6 @@
 import glob
 import os
+import sqlite3
 
 from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import (
@@ -24,6 +25,7 @@ from ...core.tag_query import (
     build_site_query_tags,
     build_tag_batch_urls,
 )
+from ..widgets.tag_completer import install_tag_completer
 
 
 class TagBatchDownloadDialog(QDialog):
@@ -34,6 +36,7 @@ class TagBatchDownloadDialog(QDialog):
         self.main_app = main_app
         self.settings = main_app.settings
         self.source_checkboxes = {}
+        self.tag_completer_controllers = []
 
         self.setWindowTitle("Tag Batch Download")
         self.setMinimumWidth(760)
@@ -41,6 +44,7 @@ class TagBatchDownloadDialog(QDialog):
 
         self._build_ui()
         self._restore_values()
+        self._setup_tag_completers()
 
     def _build_ui(self):
         main_layout = QVBoxLayout(self)
@@ -185,6 +189,99 @@ class TagBatchDownloadDialog(QDialog):
         self.download_images_cb.setChecked(self.settings.value("tag_batch_download_images", self.settings.value("r34_download_images", True), type=bool))
         self.download_videos_cb.setChecked(self.settings.value("tag_batch_download_videos", self.settings.value("r34_download_videos", True), type=bool))
         self.source_subfolders_cb.setChecked(self.settings.value("tag_batch_source_subfolders", True, type=bool))
+
+    def _setup_tag_completers(self):
+        tags = self._load_tag_candidates()
+        self.tag_completer_controllers = [
+            install_tag_completer(self.positive_input, tags, parent=self),
+            install_tag_completer(self.negative_input, tags, parent=self),
+            install_tag_completer(self.artist_input, tags, parent=self),
+            install_tag_completer(self.character_input, tags, parent=self),
+            install_tag_completer(self.general_input, tags, parent=self),
+        ]
+
+    def _load_tag_candidates(self):
+        candidates = []
+        seen = set()
+
+        def add_candidate(value):
+            value = (value or "").strip()
+            if not value:
+                return
+            key = value.lower()
+            if key in seen:
+                return
+            seen.add(key)
+            candidates.append(value)
+
+        appdata_dir = getattr(self.main_app, "user_data_path", "")
+        if not appdata_dir:
+            appdata_dir = os.path.join(getattr(self.main_app, "app_base_dir", os.getcwd()), "appdata")
+
+        self._load_character_db_candidates(os.path.join(appdata_dir, "characters.db"), add_candidate)
+        self._load_known_txt_candidates(os.path.join(appdata_dir, "Known.txt"), add_candidate)
+        self._load_library_db_candidates(
+            os.path.join(getattr(self.main_app, "app_base_dir", os.getcwd()), "AppData", "library.db"),
+            add_candidate,
+        )
+
+        return candidates
+
+    def _load_character_db_candidates(self, db_path, add_candidate):
+        if not os.path.exists(db_path):
+            return
+        try:
+            with sqlite3.connect(db_path) as conn:
+                cursor = conn.cursor()
+                cursor.execute("SELECT raw_string FROM Characters")
+                for (raw_string,) in cursor.fetchall():
+                    self._add_tag_variants(raw_string, add_candidate)
+        except Exception as exc:
+            self._log(f"Tag autocomplete skipped characters.db: {exc}")
+
+    def _load_known_txt_candidates(self, txt_path, add_candidate):
+        if not os.path.exists(txt_path):
+            return
+        try:
+            with open(txt_path, "r", encoding="utf-8") as handle:
+                for line in handle:
+                    line = line.strip()
+                    if not line or line.startswith("#"):
+                        continue
+                    self._add_tag_variants(line, add_candidate)
+        except Exception as exc:
+            self._log(f"Tag autocomplete skipped Known.txt: {exc}")
+
+    def _load_library_db_candidates(self, db_path, add_candidate):
+        if not os.path.exists(db_path):
+            return
+        try:
+            with sqlite3.connect(db_path) as conn:
+                cursor = conn.cursor()
+                cursor.execute("SELECT tag_name FROM Tags")
+                for (tag_name,) in cursor.fetchall():
+                    add_candidate(tag_name)
+        except Exception as exc:
+            self._log(f"Tag autocomplete skipped library.db: {exc}")
+
+    @staticmethod
+    def _add_tag_variants(value, add_candidate):
+        cleaned = (value or "").strip().strip("~")
+        if not cleaned:
+            return
+
+        add_candidate(cleaned)
+
+        if cleaned.startswith("(") and ")" in cleaned:
+            inside = cleaned[1:cleaned.find(")")]
+            for part in inside.split(","):
+                add_candidate(part.strip())
+
+        if "=" in cleaned:
+            left, right = cleaned.split("=", 1)
+            add_candidate(left.strip())
+            for part in right.split(","):
+                add_candidate(part.strip())
 
     def _save_values(self):
         self.settings.setValue("tag_batch_sources", ",".join(self._selected_sources()))

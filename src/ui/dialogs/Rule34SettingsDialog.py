@@ -11,6 +11,7 @@ from PyQt5.QtWidgets import (
 )
 from PyQt5.QtGui import QIcon
 from PyQt5.QtCore import Qt, QThread, pyqtSignal, QTimer, QEvent, QSize
+from ..widgets.tag_completer import install_tag_completer
 
 HELP_CONTENT = {
     "General Setup": (
@@ -402,7 +403,6 @@ class Rule34SettingsDialog(QDialog):
         fav_input_layout = QHBoxLayout()
         self.new_fav_input = MultiCompleterLineEdit()
         self.new_fav_input.setPlaceholderText("Ctrl+Down to harvest!")
-        self.new_fav_input.textEdited.connect(self.on_text_edited)
         self.add_fav_btn = QPushButton("Add")
         self.add_fav_btn.clicked.connect(self.add_character_to_db)
         fav_input_layout.addWidget(self.new_fav_input)
@@ -857,14 +857,22 @@ class Rule34SettingsDialog(QDialog):
             except Exception as e:
                 print(f"Failed to load autocomplete from DB: {e}")
         
-        self.completer = MultiCompleter([], self)
-        self.completer.setFilterMode(Qt.MatchContains)
-        self.completer.setCaseSensitivity(Qt.CaseInsensitive)
-        self.completer.setMaxVisibleItems(15) 
-        self.completer.setWrapAround(False) 
-        self.new_fav_input.setCompleter(self.completer)
+        if not hasattr(self, "tag_completer_controller") or self.tag_completer_controller is None:
+            self.tag_completer_controller = install_tag_completer(
+                self.new_fav_input,
+                self.all_tags_cache,
+                parent=self,
+                limit=40,
+            )
+        else:
+            self.tag_completer_controller.set_tags(self.all_tags_cache)
+
+        self.completer = self.tag_completer_controller.completer
 
     def on_text_edited(self, text):
+        if hasattr(self, "tag_completer_controller") and self.tag_completer_controller:
+            self.tag_completer_controller.on_text_edited(text)
+            return
         if ',' in text:
             prefix = text[:text.rfind(',') + 1]
             if not prefix.endswith(" "):
@@ -875,24 +883,5 @@ class Rule34SettingsDialog(QDialog):
         self.search_timer.start(300)
 
     def update_completer_model(self):
-        text = self.new_fav_input.text()
-        search_text = text.split(',')[-1].strip().lower()
-        if len(search_text) < 2:
-            self.completer.model().setStringList([])
-            return
-
-        raw_matches = [tag for tag in self.all_tags_cache if search_text in tag.lower()]
-        def get_score(tag):
-            t = tag.lower()
-            has_franchise = "(" in t and ")" in t
-            if has_franchise and (t.startswith(search_text + " ") or t.startswith(search_text + "_") or t.startswith(search_text + "(")): return 1
-            if t == search_text: return 2
-            if t.startswith(search_text + " ") or t.startswith(search_text + "_"): return 3
-            if t.startswith(search_text) and has_franchise: return 4
-            if t.startswith(search_text): return 5
-            if f" {search_text}" in t or f"_{search_text}" in t or f"({search_text}" in t: return 6 if has_franchise else 7
-            return 8
-
-        raw_matches.sort(key=lambda x: (get_score(x), len(x), x))
-        self.completer.model().setStringList(raw_matches[:40])
-        self.completer.complete()
+        if hasattr(self, "tag_completer_controller") and self.tag_completer_controller:
+            self.tag_completer_controller.update_completions()
